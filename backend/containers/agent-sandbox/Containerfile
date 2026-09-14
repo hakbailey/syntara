@@ -1,0 +1,29 @@
+# The harness deliberately reuses the already-built Syntara application image so the
+# exact same Python/LangGraph code is exercised on both sides of AgentRuntime.
+ARG APP_IMAGE=localhost/syntara:latest
+FROM ${APP_IMAGE}
+
+USER 0
+
+WORKDIR /opt/app-root/src
+
+# Do not depend on compose building the base image first: always package the
+# current worktree's harness/shared-loop code into this image.
+COPY --chown=1001:0 src/ ./src/
+
+# A static seccomp profile cannot path-filter execve without also preventing PID
+# 1 from starting. Make the packaged shells root-only; the profile separately
+# blocks fork/vfork/execveat and privilege-building kernel APIs.
+RUN if [ -e /usr/bin/bash ]; then chmod 0700 /usr/bin/bash; fi
+
+ENV HOME=/tmp \
+    XDG_CACHE_HOME=/tmp/.cache \
+    TMPDIR=/tmp \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+USER 1001:0
+
+EXPOSE 8090
+
+ENTRYPOINT ["python", "-m", "syntara.agent_orchestrator.harness.app"]

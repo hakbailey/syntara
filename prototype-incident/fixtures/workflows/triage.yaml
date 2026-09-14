@@ -1,0 +1,109 @@
+schema_version: "2.0.0"
+name: incident-triage
+description: |
+  Webhook-triggered triage for the incident-triage reference task. An agent inspects
+  read-only logs/metrics for the alerting service, recommends a specific AAP job template
+  (discovered via AAP's own MCP server, not hardcoded), and — after a human approves —
+  a downstream HTTP call triggers the separate, deterministic remediation workflow. The
+  agent still never holds the AAP credential and never calls AAP directly; it only ever
+  names a job template by id/name in its structured output.
+triggers:
+  - id: trigger_webhook
+    type: webhook_trigger
+    parameters:
+      webhook_path: "{{WEBHOOK_PATH}}"
+      input_schema:
+        type: object
+        properties:
+          service:
+            type: string
+          severity:
+            type: string
+        required:
+          - service
+      authorized_service_account_ids:
+        - "{{SERVICE_ACCOUNT_ID}}"
+nodes:
+  - id: triage
+    type: agentic
+    name: Triage Incident
+    parameters:
+      prompt: |
+        {{TRIAGE_PROMPT}}
+      llm_model_id: "{{LLM_MODEL_ID}}"
+      credential_id: "{{LLM_CREDENTIAL_ID}}"
+      tool_selection_strategy: "SELECTED"
+      tool_selections:
+        - "{{LOG_TOOL_ID}}"
+        - "{{METRIC_TOOL_ID}}"
+        {{AAP_MCP_TOOL_SELECTIONS}}
+      integration_connections:
+        - integration_id: "{{AAP_MCP_INTEGRATION_ID}}"
+          credential_id: "{{AAP_MCP_CREDENTIAL_ID}}"
+      response_schema:
+        type: object
+        properties:
+          job_template_id:
+            type: integer
+            description: The AAP job template id (from an AAP job-template discovery tool) to run.
+          job_template_name:
+            type: string
+            description: That job template's exact name, for the human approver to recognize (id alone isn't meaningful to a human).
+          limit:
+            type: string
+            description: Ansible --limit host pattern for the remediation job. Empty string if not applicable.
+          summary:
+            type: string
+            description: One-paragraph explanation for the human approver.
+        required:
+          - job_template_id
+          - job_template_name
+          - limit
+          - summary
+
+  - id: approval
+    type: approval
+    name: Approve Remediation
+    parameters:
+      approver_users:
+        - "{{APPROVER_USERNAME}}"
+      prompt: "Approve running AAP job template '${triage.result.content.job_template_name}' (id ${triage.result.content.job_template_id}) for this incident? ${triage.result.content.summary}"
+      decision_window: {{APPROVAL_DECISION_WINDOW_SECONDS}}
+      fallback_decision: "reject"
+
+  - id: get_token
+    type: http_request
+    name: Get Syntara Access Token
+    parameters:
+      method: POST
+      url: "{{SYNTARA_INTERNAL_BASE_URL}}/auth/token"
+      credential_id: "{{SA_BASIC_AUTH_CREDENTIAL_ID}}"
+      headers:
+        Content-Type: application/x-www-form-urlencoded
+      body: "grant_type=client_credentials"
+
+  - id: trigger_remediation
+    type: http_request
+    name: Trigger Remediation Workflow
+    parameters:
+      method: POST
+      url: "{{SYNTARA_INTERNAL_BASE_URL}}/executions"
+      headers:
+        Authorization: "Bearer ${get_token.body.access_token}"
+      body:
+        workflow_id: "{{REMEDIATION_WORKFLOW_ID}}"
+        trigger_node_id: "trigger_manual"
+        use_published: true
+        input_data:
+          job_template_name: "${triage.result.content.job_template_name}"
+          limit: "${triage.result.content.limit}"
+edges:
+  - from: trigger_webhook
+    to: triage
+  - from: triage
+    to: approval
+  - from: approval
+    to: get_token
+    from_port: "approved"
+  - from: get_token
+    to: trigger_remediation

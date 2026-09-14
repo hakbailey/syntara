@@ -28,6 +28,7 @@ async def get_openrouter_llm(
     base_url: str | None = None,
     insecure_skip_tls_verify: bool = False,
     ca_certificate: str | None = None,
+    default_headers: dict[str, str] | None = None,
 ) -> tuple[ChatOpenAI, httpx.AsyncClient | None]:
     """Configure LangChain ChatOpenAI for an LLM provider endpoint.
 
@@ -50,6 +51,7 @@ async def get_openrouter_llm(
         base_url: Base URL of the LLM provider endpoint. If None, uses settings default.
         insecure_skip_tls_verify: Disable TLS certificate verification.
         ca_certificate: PEM-encoded CA certificate to trust.
+        default_headers: Additional HTTP headers sent with every provider request.
 
     Returns:
         Tuple of (ChatOpenAI instance, optional httpx.AsyncClient that the caller
@@ -74,6 +76,7 @@ async def get_openrouter_llm(
         "default_headers": {
             "HTTP-Referer": "https://github.com/syntara-orchestration/syntara",
             "X-Title": settings.product_name,
+            **(default_headers or {}),
         },
     }
 

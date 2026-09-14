@@ -119,3 +119,7 @@ worktrees/
 
 # top-level node_modules directory if it is inadvertently created
 node_modules/
+
+# Reference material pulled in for the agentic-orchestration prototyping effort
+# (design docs, prior-art writeups) — working notes, not meant to be committed.
+prototype-reference-docs/

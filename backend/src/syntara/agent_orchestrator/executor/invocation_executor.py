@@ -11,6 +11,7 @@ from uuid import UUID
 import structlog
 
 from syntara.audit.utils import escalate_actor_type
+from syntara.auth.services.token_service import TokenService
 from syntara.core.models.principal import service_principal_id
 
 if TYPE_CHECKING:
@@ -41,6 +42,7 @@ from syntara.agent_orchestrator.models import (
     InvocationStatus,
     LLMCredentialConfig,
 )
+from syntara.agent_orchestrator.runtime import AgentRuntime, get_agent_runtime
 from syntara.agent_orchestrator.services.error_handler import classify_streaming_error
 from syntara.agent_orchestrator.services.orchestration_service import OrchestrationService
 from syntara.agent_orchestrator.token_manager.repository import TokenUsageRepository
@@ -74,6 +76,11 @@ from syntara.integrations.services.integration_service import ALLOWED_CREDENTIAL
 from syntara.metrics.dependencies import get_metrics_recorder
 from syntara.metrics.recorder import MetricsRecorder
 from syntara.metrics.types import MetricType
+from syntara.service_accounts.models.service_account import ServiceAccount, ServiceAccountStatus
+from syntara.service_accounts.models.service_account_credential import (
+    ServiceAccountCredential,
+    ServiceAccountCredentialStatus,
+)
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -145,6 +152,13 @@ class InvocationExecutor:
                 actor_username=user.username,
                 actor_type=escalate_actor_type(user.id),
             )
+        service_account = await self._load_service_account_for_actor_context(invocation.created_by)
+        if service_account:
+            return AuditActorContext(
+                actor_id=service_account.id,
+                actor_username=service_account.name,
+                actor_type=PrincipalType.SERVICE_ACCOUNT,
+            )
         settings = get_settings()
         cn = settings.service_identity
         logger.warning(
@@ -206,6 +220,11 @@ class InvocationExecutor:
         """
         async with self.get_async_session_context() as session:
             return await session.get(User, user_id)
+
+    async def _load_service_account_for_actor_context(self, principal_id: UUID) -> ServiceAccount | None:
+        """Load a service-account creator for deferred invocation execution."""
+        async with self.get_async_session_context() as session:
+            return await session.get(ServiceAccount, principal_id)
 
     async def _update_invocation_status(
         self,
@@ -378,20 +397,21 @@ class InvocationExecutor:
         # Log conversion failures but allow execution to proceed (FR-020)
         await self._log_conversion_failures(invocation, ctx)
 
-        # Initialize OrchestrationService - fail immediately if LLM not configured
-        init_result = await self._init_orchestration(invocation, ctx)
+        if actor_context is None:
+            actor_context = await self._get_actor_context_for_invocation(invocation)
+
+        # Initialize the AgentRuntime - fail immediately if LLM not configured
+        init_result = await self._init_orchestration(invocation, ctx, actor_context=actor_context)
         if init_result is None:
             return
 
-        orchestration_service, llm_http_client = init_result
+        agent_runtime, llm_http_client = init_result
 
         # Execute orchestration with error handling
         workflow_id: UUID | None = extract_workflow_id(ctx)
         activity_id: str | None = ctx.activity_id
         execution_id: UUID | None = extract_execution_id(ctx)
         request_id: UUID | None = extract_request_id(ctx)
-        if actor_context is None:
-            actor_context = await self._get_actor_context_for_invocation(invocation)
         try:
             with audit_actor_context(
                 actor=actor_context,
@@ -400,7 +420,7 @@ class InvocationExecutor:
                 execution_id=execution_id,
                 request_id=request_id,
             ):
-                await self._execute_orchestration(invocation, orchestration_service, ctx, actor_context)
+                await self._execute_orchestration(invocation, agent_runtime, ctx, actor_context)
         finally:
             if llm_http_client is not None:
                 await llm_http_client.aclose()
@@ -408,15 +428,15 @@ class InvocationExecutor:
     async def _execute_orchestration(
         self,
         invocation: Invocation,
-        orchestration_service: OrchestrationService,
+        agent_runtime: AgentRuntime,
         ctx: InvocationContextData,
         actor_context: AuditActorContext,
     ) -> None:
-        """Execute orchestration service and handle result processing.
+        """Execute the agent runtime and handle result processing.
 
         Args:
             invocation: The invocation to execute
-            orchestration_service: Initialized orchestration service
+            agent_runtime: Initialized AgentRuntime for this invocation
             ctx: Parsed context_data model
             actor_context: Actor context for audit event
 
@@ -452,9 +472,9 @@ class InvocationExecutor:
                 )
             )
 
-            # Execute through OrchestrationService (which handles context enhancement internally)
+            # Execute through the AgentRuntime (which handles context enhancement internally)
             logger.info(
-                "Executing through OrchestrationService",
+                "Executing through AgentRuntime",
                 invocation_id=invocation.id,
                 prompt=invocation.prompt,
             )
@@ -464,7 +484,7 @@ class InvocationExecutor:
             response_schema = opaque.get_data() if opaque else None
 
             timeout = ctx.timeout_seconds
-            execute_coro = orchestration_service.execute(
+            execute_coro = agent_runtime.execute(
                 prompt=invocation.prompt,
                 session_id=invocation.session_id,
                 invocation_id=invocation.id,
@@ -675,15 +695,19 @@ class InvocationExecutor:
                 exc_info=True,
             )
 
-    async def _init_orchestration(
-        self, invocation: Invocation, ctx: InvocationContextData
-    ) -> "tuple[OrchestrationService, httpx.AsyncClient | None] | None":
-        """Initialise LLM and OrchestrationService, handling configuration failures.
+    async def _init_orchestration(  # noqa: PLR0915
+        self,
+        invocation: Invocation,
+        ctx: InvocationContextData,
+        *,
+        actor_context: AuditActorContext | None = None,
+    ) -> "tuple[AgentRuntime, httpx.AsyncClient | None] | None":
+        """Initialise LLM, OrchestrationService, and the AgentRuntime, handling configuration failures.
 
         Extracts LLM credentials from invocation context_data (injected by the
         credential system via agentic_activity) and falls back to env vars.
 
-        Returns ``(OrchestrationService, optional httpx client)`` or ``None``
+        Returns ``(AgentRuntime, optional httpx client)`` or ``None``
         on failure.  The caller must close the httpx client when orchestration
         completes.
         """
@@ -694,9 +718,11 @@ class InvocationExecutor:
 
             await self._validate_credentials_eagerly(meta, invocation.project_id)
 
+            settings = get_settings()
+            engine = settings.agent_runtime_engine
             raw_credential_id = meta.credential_id.get_secret_value() if meta and meta.credential_id else None
             credential_api_key: str | None = None
-            if raw_credential_id:
+            if raw_credential_id and engine == "in_process":
                 credential_api_key = await self._resolve_llm_api_key(raw_credential_id)
 
             resolved_model: str | None = None
@@ -718,13 +744,34 @@ class InvocationExecutor:
                     invocation_id=invocation.id,
                 )
 
-            llm, llm_http_client = await get_openrouter_llm(
-                api_key=credential_api_key,
-                base_url=integration_base_url,
-                model=resolved_model,
-                insecure_skip_tls_verify=insecure_skip_tls_verify,
-                ca_certificate=ca_certificate,
-            )
+            llm_integration_id: UUID | None = None
+            gate_token: str | None = None
+            if engine == "sandboxed":
+                if not raw_credential_id or not meta or not meta.llm_model_id or resolved_model is None:
+                    msg = "Sandboxed runtime requires an LLM model and credential reference."
+                    raise LLMConfigurationError(msg)  # noqa: TRY301
+                if actor_context is None:
+                    actor_context = await self._get_actor_context_for_invocation(invocation)
+                gate_token = await self._issue_gate_token(actor_context)
+                llm_integration_id = await self._resolve_llm_integration_id(meta.llm_model_id)
+                llm, llm_http_client = await get_openrouter_llm(
+                    api_key=gate_token,
+                    base_url=f"{str(settings.agent_gate_base_url).rstrip('/')}/llm/{llm_integration_id}/openai/v1",
+                    model=resolved_model,
+                    default_headers={
+                        "X-Syntara-Credential-ID": raw_credential_id,
+                        "X-Syntara-Session-ID": invocation.session_id,
+                        "X-Syntara-Invocation-ID": str(invocation.id),
+                    },
+                )
+            else:
+                llm, llm_http_client = await get_openrouter_llm(
+                    api_key=credential_api_key,
+                    base_url=integration_base_url,
+                    model=resolved_model,
+                    insecure_skip_tls_verify=insecure_skip_tls_verify,
+                    ca_certificate=ca_certificate,
+                )
 
             llm_credential_config = LLMCredentialConfig(
                 api_key=credential_api_key or "",
@@ -755,8 +802,26 @@ class InvocationExecutor:
                 tool_selections=list(meta.tool_selections) if meta else [],
                 session_factory=self.session_factory,
             )
+            sandbox_options: dict[str, Any] | None = None
+            if engine == "sandboxed":
+                assert gate_token is not None  # noqa: S101 -- narrowed by branch above
+                assert llm_integration_id is not None  # noqa: S101 -- narrowed by branch above
+                assert raw_credential_id is not None  # noqa: S101 -- narrowed by branch above
+                sandbox_options = {
+                    "harness_relay_url": str(settings.agent_gate_base_url),
+                    "gate_token": gate_token,
+                    "model_name": resolved_model,
+                    "llm_integration_id": llm_integration_id,
+                    "llm_credential_id": raw_credential_id,
+                    "project_id": invocation.project_id,
+                    "integration_credentials": {
+                        UUID(connection.integration_id): connection.credential_id
+                        for connection in (meta.integration_connections if meta else []) or []
+                    },
+                }
+            agent_runtime = get_agent_runtime(service, engine=engine, sandbox_options=sandbox_options)
             logger.info("LLM initialized successfully for invocation", invocation_id=invocation.id)
-            return service, llm_http_client
+            return agent_runtime, llm_http_client
         except (LLMConfigurationError, CredentialResolutionError) as e:
             logger.exception("LLM configuration failed for invocation", invocation_id=invocation.id)
             now = datetime.now(UTC)
@@ -1110,6 +1175,54 @@ class InvocationExecutor:
             field_name="bearer_token",
             label="execution credential",
         )
+
+    async def _issue_gate_token(self, actor_context: AuditActorContext) -> str:
+        """Mint a short-lived bearer for the same service account that owns the run."""
+        if actor_context.actor_type != PrincipalType.SERVICE_ACCOUNT or actor_context.actor_id is None:
+            msg = "Sandboxed runtime currently requires a service-account invocation."
+            raise LLMConfigurationError(msg)
+
+        async with self.get_async_session_context() as session:
+            service_account = await session.get(ServiceAccount, actor_context.actor_id)
+            if service_account is None or service_account.status != ServiceAccountStatus.ACTIVE:
+                msg = "The invocation service account is unavailable or disabled."
+                raise LLMConfigurationError(msg)
+            result = await session.exec(
+                select(ServiceAccountCredential).where(
+                    ServiceAccountCredential.service_account_id == service_account.id,
+                    ServiceAccountCredential.status == ServiceAccountCredentialStatus.ACTIVE,
+                )
+            )
+            now = datetime.now(UTC)
+            credential = next(
+                (item for item in result.all() if item.expires_at is None or item.expires_at > now),
+                None,
+            )
+            if credential is None:
+                msg = "The invocation service account has no active credential for gate authentication."
+                raise LLMConfigurationError(msg)
+
+        return TokenService().create_access_token(
+            subject_id=service_account.id,
+            username=service_account.name,
+            token_version=service_account.token_version,
+            credential_id=credential.id,
+            principal_type=PrincipalType.SERVICE_ACCOUNT,
+        )
+
+    async def _resolve_llm_integration_id(self, llm_model_id: str) -> UUID:
+        """Resolve the provider integration reference without resolving its secret."""
+        try:
+            model_uuid = UUID(llm_model_id)
+        except ValueError as exc:
+            msg = f"Invalid LLM model ID '{llm_model_id}'."
+            raise LLMConfigurationError(msg) from exc
+        async with self.get_async_session_context() as session:
+            model = await session.get(LLMModel, model_uuid)
+            if model is None:
+                msg = f"LLM model '{llm_model_id}' not found."
+                raise LLMConfigurationError(msg)
+            return model.integration_id
 
     async def _resolve_llm_model_and_integration(
         self, llm_model_id: str

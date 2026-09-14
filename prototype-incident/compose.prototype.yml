@@ -1,0 +1,133 @@
+---
+# Adds a second MCP tool server for the incident-triage prototype, reachable as
+# incident-mcp-server:8765. Reuses the SAME image the main podman-compose.yml already
+# builds for the `mcp-server` service (unmodified Containerfile) — this file just
+# bind-mounts our own tool script + fixture data in and overrides the container command,
+# the same trick backend/tools/run_mcp_scenario_servers.py uses for auxiliary MCP servers.
+#
+# See README.md's Run section for the full sequence (source .env first — it sets the allowed-
+# hosts vars below, which the main stack's containers read at startup). This file is merged
+# into every stack command (see the Makefile's $(COMPOSE)), including the full-stack `make
+# stack-up` — not just `make mcp-up` — since it also patches the two Temporal worker services
+# below. The explicit empty `default` network at the end preserves the root compose file's
+# implicit bridge when the private, internal-only `agent-sandbox` bridge is added. It must not
+# be marked external: doing that breaks a fresh `make stack-up`.
+#
+# This server only serves the synthetic log/metric tools. AAP job-template discovery comes
+# from AAP's own real MCP server instead, registered as a separate integration directly by
+# seed_scenario.py — nothing AAP-related needs to be wired into this container.
+#
+# The two worker containers' generic outbound HTTP client (used by http_request nodes, e.g.
+# triage.yaml's get_token/trigger_remediation calling Syntara's own API) also needs to trust the
+# dev CA — confirmed live: that client is a plain httpx.AsyncClient() with default
+# verify=True against certifi's bundle, so calls to https://syntara:8000 fail cert
+# verification otherwise. This is NOT done via an SSL_CERT_FILE env var here: setting that
+# REPLACES the trust store instead of adding to it, which broke the background-worker's own
+# real calls to the external LLM provider (confirmed live — a genuine regression, since that
+# worker also handles agentic-node LLM invocations). See the Makefile's `trust-dev-ca` target
+# instead, which appends the dev CA into both containers' certifi bundle (additive) — it
+# runs automatically as part of `make stack-up`.
+
+services:
+  syntara:
+    environment:
+      - APP_AGENT_HARNESS_URL=http://agent-harness:8090
+    networks:
+      default: {}
+      agent-sandbox:
+        aliases:
+          - agent-gate
+
+  temporal-worker:
+    environment:
+      - APP_AGENT_RUNTIME_ENGINE=sandboxed
+      - APP_AGENT_GATE_BASE_URL=https://syntara:8000/api/v1/agent-gate
+
+  # Built-in Agent Execution workflows (including the incident webhook) run on
+  # the dedicated background queue, not the user-workflow queue above. Keep the
+  # same runtime boundary on both workers so the real webhook path cannot fall
+  # back to the default in-process engine.
+  temporal-background-worker:
+    environment:
+      - APP_AGENT_RUNTIME_ENGINE=sandboxed
+      - APP_AGENT_GATE_BASE_URL=https://syntara:8000/api/v1/agent-gate
+
+  agent-harness:
+    build:
+      context: ./backend
+      dockerfile: containers/agent-sandbox/Containerfile
+      args:
+        APP_IMAGE: ${APP_IMAGE:-localhost/syntara:latest}
+    image: ${AGENT_HARNESS_IMAGE:-localhost/syntara-agent-harness:prototype-a3}
+    restart: unless-stopped
+    user: "1001:0"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      # The prototype Makefile supplies an absolute path because podman-compose
+      # passes security_opt through unchanged and Podman resolves relative paths
+      # differently across host/VM configurations.
+      - seccomp=${AGENT_SANDBOX_SECCOMP_PROFILE}
+    pids_limit: 64
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    environment:
+      # The dev certificate covers `syntara`; using the alias `agent-gate`
+      # fails hostname verification before the harness can reach the relay.
+      - HARNESS_GATE_BASE_URL=https://syntara:8000/api/v1/agent-gate
+      - HARNESS_GATE_CA_PATH=/run/trust/agent-gate-ca.pem
+      - HARNESS_REQUEST_TIMEOUT_SECONDS=300
+    volumes:
+      # Public trust anchor only. No private key, model key, MCP token, DB
+      # credential, Redis credential, or Temporal credential enters this service.
+      - ./backend/.secrets/certs/ca.pem:/run/trust/agent-gate-ca.pem:ro,Z
+      # A4 probes are bind-mounted read-only so they cannot become part of the
+      # harness image or be mistaken for application code.
+      - ./backend/containers/agent-sandbox/attack_suite.py:/opt/agent-sandbox/attack_suite.py:ro,Z
+    networks:
+      - agent-sandbox
+    depends_on:
+      syntara:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  incident-mcp-server:
+    image: ${MCP_IMAGE:-localhost/syntara-mcp:latest}
+    restart: unless-stopped
+    working_dir: /opt/app-root
+    # Paths below are relative to the repo root, NOT this file's own directory — confirmed
+    # live that podman-compose resolves relative volume paths against the directory of the
+    # FIRST -f file given (../podman-compose.yml, i.e. repo root), not each override file's
+    # own location, and there is no --project-directory flag in this podman-compose version
+    # to override that. Getting this wrong doesn't error: podman silently bind-mounts an
+    # empty directory at the target path instead of the intended file (same failure shape as
+    # the missing-TLS-cert issue found earlier), and the container crash-loops with "can't
+    # find '__main__' module in ..." since it's now a directory, not serve.py.
+    volumes:
+      - ./prototype-incident/mcp_server/serve.py:/opt/app-root/serve.py:ro,Z
+      - ./prototype-incident/fixtures/incident_data.json:/opt/app-root/incident_data.json:ro,Z
+    environment:
+      - INCIDENT_DATA_PATH=/opt/app-root/incident_data.json
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8765
+    command: ["sh", "-c", "uv run python serve.py"]
+    ports:
+      - "127.0.0.1:${PROTOTYPE_INCIDENT_MCP_HOST_PORT:-8768}:8765"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  default: {}
+  agent-sandbox:
+    internal: true

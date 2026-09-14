@@ -20,8 +20,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import END, StateGraph
+from langgraph.graph import END
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 from sqlalchemy.exc import SQLAlchemyError
@@ -42,7 +41,9 @@ from syntara.agent_orchestrator.models.streaming_events import (
     ToolCallEventData,
     ToolResultEventData,
 )
+from syntara.agent_orchestrator.services.agent_loop import compile_agent_graph, stream_agent_graph
 from syntara.agent_orchestrator.services.error_handler import classify_streaming_error
+from syntara.agent_orchestrator.services.stream_publisher import stream_publisher
 from syntara.agent_orchestrator.services.streaming_service import get_invocation_stream_id
 from syntara.agent_orchestrator.tool_manager import ToolRetriever
 from syntara.agent_orchestrator.tool_manager.execution_failure_handler import (
@@ -317,10 +318,6 @@ class OrchestrationService:
         """
         logger.info("Initializing LangGraph orchestration with ToolNode support")
 
-        # Create state graph
-        workflow = StateGraph(AgentState)
-
-        # Add agent nodes
         session_id: str = state["session_id"]
         invocation_id: UUID = state["invocation_id"]
         execution_id: UUID | None = state["execution_id"]
@@ -332,11 +329,10 @@ class OrchestrationService:
             session_id, invocation_id, execution_id, request_id, activity_id, activity_name
         )
 
-        workflow.add_node(AgentRoutes.ORCHESTRATOR, self._create_orchestrator_node())
-        workflow.add_node(AgentRoutes.GENERIC_AGENT, self._create_generic_agent_node(available_tools))
-        workflow.add_node(
-            AgentRoutes.TOOLS,
-            self._create_tool_node(
+        graph = compile_agent_graph(
+            orchestrator_node=self._create_orchestrator_node(),
+            agent_node=self._create_generic_agent_node(available_tools),
+            tool_node=self._create_tool_node(
                 available_tools,
                 session_id,
                 invocation_id,
@@ -345,29 +341,9 @@ class OrchestrationService:
                 activity_id=activity_id,
                 activity_name=activity_name,
             ),
+            route_after_orchestrator=self._route_after_orchestrator,
+            next_after_agent=self._should_call_tools,
         )
-
-        # Set entry point to ToolNode
-        workflow.set_entry_point(AgentRoutes.ORCHESTRATOR)
-
-        # Add conditional edges from orchestrator to specialist agents
-        workflow.add_conditional_edges(
-            AgentRoutes.ORCHESTRATOR,
-            self._route_after_orchestrator,
-            {
-                AgentRoutes.GENERIC_AGENT: AgentRoutes.GENERIC_AGENT,
-            },
-        )
-
-        # Add conditional edges from GenericAgent to Tools
-        workflow.add_conditional_edges(AgentRoutes.GENERIC_AGENT, self._should_call_tools, [AgentRoutes.TOOLS, END])
-
-        # Tools to GenericAgent route
-        workflow.add_edge(AgentRoutes.TOOLS, AgentRoutes.GENERIC_AGENT)
-
-        # Compile graph with checkpointing for multi-turn support
-        checkpointer = MemorySaver()
-        graph = workflow.compile(checkpointer=checkpointer)
 
         logger.info("LangGraph orchestration with ToolNode initialized successfully")
         return graph
@@ -683,7 +659,6 @@ class OrchestrationService:
             Final agent state or None if not captured
 
         """
-        final_state: AgentState | None = None
         ttft_tracker = LLMStreamTracker(
             recorder=get_metrics_recorder(),
             model=self._get_model_name(),
@@ -696,21 +671,15 @@ class OrchestrationService:
             name="cancellation_watcher",
         )
         try:
-            # Stream events from LangGraph
-            async for event in graph.astream_events(initial_state, config, version="v2"):
+            async def on_event(event_dict: dict[str, Any]) -> None:
                 if cancel_event.is_set():
                     raise InvocationCancelledError(str(invocation_id), phase="streaming")  # noqa: TRY301
 
-                # Process streaming events (event is StandardStreamEvent | CustomStreamEvent)
-                event_dict = cast("dict[str, Any]", event)
                 ttft_tracker.process_event(event_dict)
                 await self._process_streaming_event(event_dict, invocation_id, stream_id, client)
-
-                # Accumulate for trace persistence
                 trace_accumulator.accumulate(event_dict)
 
-                # Capture final state from graph end events
-                final_state = self._extract_final_state(event_dict, final_state)
+            return await stream_agent_graph(graph, initial_state, config, on_event)
         except InvocationCancelledError:
             raise
         except Exception:
@@ -741,7 +710,6 @@ class OrchestrationService:
         # a conditional UPDATE (WHERE status != CANCELLED) to guarantee the DB
         # never flips from CANCELLED to COMPLETED. The streaming-layer watcher is
         # an optimisation to stop work early, not a correctness guarantee.
-        return final_state
 
     async def _check_cancellation_signal(
         self,
@@ -888,13 +856,7 @@ class OrchestrationService:
             data: Pre-serialised event payload (already a dict)
 
         """
-        event = {
-            "event_type": event_type,
-            "invocation_id": str(invocation_id),
-            "timestamp": datetime.now(UTC).isoformat(),
-            "data": data,
-        }
-        await client.publish(stream_id, event)
+        await stream_publisher.publish(client, stream_id, event_type, invocation_id, data)
 
     async def _process_chat_stream_event(
         self, event: dict[str, Any], invocation_id: UUID, stream_id: str, client: StreamClient

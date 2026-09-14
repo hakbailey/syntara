@@ -21,7 +21,7 @@ import warnings
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Literal, Self
 from urllib.parse import urlparse
 
 from pydantic import Field, HttpUrl, SecretStr, computed_field, field_validator, model_validator
@@ -1495,6 +1495,21 @@ class WorkflowEngineSettings(BaseSettings):
     agent_orchestrator_base_url: HttpUrl = Field(  # type: ignore[assignment]
         default="http://localhost:8000/api/v1",
         description="Base URL for Agent Orchestrator API",
+    )
+
+    agent_runtime_engine: Literal["in_process", "sandboxed"] = Field(
+        default="in_process",
+        description="AgentRuntime implementation used for agent invocations.",
+    )
+
+    agent_harness_url: HttpUrl = Field(  # type: ignore[assignment]
+        default="http://agent-harness:8090",
+        description="Internal URL used by the API-side gate relay to reach the sandboxed harness.",
+    )
+
+    agent_gate_base_url: HttpUrl = Field(  # type: ignore[assignment]
+        default="http://localhost:8000/api/v1/agent-gate",
+        description="Agent governance gate base URL used by sandbox runtime clients.",
     )
 
     approvals_api_base_url: HttpUrl = Field(  # type: ignore[assignment]

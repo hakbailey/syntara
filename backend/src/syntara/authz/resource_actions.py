@@ -212,7 +212,8 @@ def build_resource_actions(app: FastAPI) -> dict[str, list[str]]:
     1. ``PermissionChecker`` / ``ProjectScopeFilter`` instances attached to
        registered ``APIRoute`` dependencies.
     2. ``BUILTIN_POLICIES`` entries (captures pairs like ``role-assignment:read``
-       that are enforced via inline ``authorize()`` calls rather than route deps).
+       that are enforced via inline ``authorize()`` calls rather than route deps,
+       and defines the project eligibility of built-in project policies).
 
     The result is sorted (resource types alphabetically, actions within each
     resource type alphabetically) to produce a deterministic, API-friendly
@@ -243,6 +244,8 @@ def build_resource_actions(app: FastAPI) -> dict[str, list[str]]:
 
     for policy in BUILTIN_POLICIES:
         pairs.add((policy.resource, policy.action))
+        if policy.scope in ("project", "own"):
+            project_eligible.add(policy.resource)
 
     grouped: dict[str, set[str]] = defaultdict(set)
     for resource_type, action in pairs:

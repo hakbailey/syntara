@@ -30,6 +30,9 @@ repos:
         exclude: tsconfig.*\.json$
       - id: check-toml
       - id: check-yaml
+        # {{PLACEHOLDER}} tokens (seed-time text substitution, not real YAML syntax) make
+        # these files invalid as standalone YAML by design — see prototype-incident/README.md.
+        exclude: ^prototype-incident/fixtures/workflows/.*\.yaml$
       - id: mixed-line-ending
         args: [--fix=lf]
 
@@ -107,7 +110,11 @@ repos:
     rev: b5ca1890231d5e1e5181fef75a1be609d1e25029 # v0.21.0
     hooks:
       - id: yamlfmt
-        exclude: ^backend/rpms\.lock\.yaml$
+        # rpms.lock.yaml: not really YAML we own the formatting of. prototype-incident's
+        # workflow fixtures: {{PLACEHOLDER}} tokens are seed-time text substitution, not
+        # real YAML syntax — yamlfmt has silently corrupted unquoted ones into flow
+        # mappings before (confirmed live) — see prototype-incident/README.md.
+        exclude: ^(backend/rpms\.lock\.yaml|prototype-incident/fixtures/workflows/.*\.yaml)$
         args:
           - --formatter
           - include_document_start=true,retain_line_breaks=true,scan_folded_as_literal=true

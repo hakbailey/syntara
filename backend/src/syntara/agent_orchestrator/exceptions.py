@@ -67,6 +67,7 @@ class LLMConfigurationError(AgentOrchestratorError):
     """
 
 
+@fastapi_exception(handler="syntara.agent_orchestrator.error_handlers.credential_resolution_error_handler")
 class CredentialResolutionError(AgentOrchestratorError):
     """Raised when an execution credential cannot be resolved for an integration.
 
@@ -74,6 +75,16 @@ class CredentialResolutionError(AgentOrchestratorError):
     failure, or injector template resolution failure.  Distinct from
     LLMConfigurationError which is specific to LLM provider credentials.
     """
+
+
+@fastapi_exception(handler="syntara.agent_orchestrator.error_handlers.gate_authentication_required_handler")
+class GateAuthenticationRequiredError(AgentOrchestratorError):
+    """Raised when a governance-gate request has no valid service account Bearer token."""
+
+    def __init__(self, detail: str = "A valid service account Bearer token is required") -> None:
+        """Initialize exception with detail message."""
+        self.detail = detail
+        super().__init__(detail)
 
 
 class EmptyLLMResponseError(AgentOrchestratorError, RetryableError):

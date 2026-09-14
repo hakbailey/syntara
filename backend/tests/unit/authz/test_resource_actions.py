@@ -466,6 +466,14 @@ class TestValidateProjectStatements:
         stmts = [{"scope": "project", "actions": ["project:read"]}]
         assert validate_project_statements(stmts) is None
 
+    def test_builtin_project_tool_read_is_valid(self) -> None:
+        from syntara.authz.resource_actions import validate_project_statements
+
+        # The built-in project tool:read policy is the contract for custom
+        # project policies that grant the same action.
+        stmts = [{"scope": "project", "actions": ["tool:read"]}]
+        assert validate_project_statements(stmts) is None
+
     def test_own_scope_valid(self) -> None:
         from syntara.authz.resource_actions import validate_project_statements
 

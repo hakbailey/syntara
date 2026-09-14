@@ -1,0 +1,41 @@
+{
+  "checkout": {
+    "logs": [
+      {"ts_minutes_ago": 2, "level": "ERROR", "message": "PaymentGatewayTimeoutError: upstream did not respond in 5000ms"},
+      {"ts_minutes_ago": 3, "level": "ERROR", "message": "PaymentGatewayTimeoutError: upstream did not respond in 5000ms"},
+      {"ts_minutes_ago": 5, "level": "WARN", "message": "Retrying payment authorization, attempt 2/3"},
+      {"ts_minutes_ago": 12, "level": "INFO", "message": "Deploy completed: checkout@v2.114.0"}
+    ],
+    "metrics": {
+      "error_rate": {"current": 0.23, "baseline": 0.01, "unit": "fraction_of_requests"},
+      "latency_p95_ms": {"current": 4800, "baseline": 220},
+      "throughput_rps": {"current": 340, "baseline": 410}
+    }
+  },
+  "payments": {
+    "logs": [
+      {"ts_minutes_ago": 1, "level": "ERROR", "message": "Connection pool exhausted: db-primary"},
+      {"ts_minutes_ago": 4, "level": "WARN", "message": "Slow query on ledger_entries (1.8s)"}
+    ],
+    "metrics": {
+      "error_rate": {"current": 0.08, "baseline": 0.01, "unit": "fraction_of_requests"},
+      "latency_p95_ms": {"current": 1900, "baseline": 180},
+      "throughput_rps": {"current": 210, "baseline": 205}
+    }
+  },
+  "db-primary": {
+    "logs": [
+      {"ts_minutes_ago": 1, "level": "ERROR", "message": "FATAL: remaining connection slots are reserved"},
+      {"ts_minutes_ago": 6, "level": "WARN", "message": "Autovacuum running long on ledger_entries"}
+    ],
+    "metrics": {
+      "error_rate": {"current": 0.02, "baseline": 0.001, "unit": "fraction_of_requests"},
+      "connections_used_pct": {"current": 98, "baseline": 40},
+      "throughput_rps": {"current": 1200, "baseline": 1150}
+    }
+  },
+  "_alerts": [
+    {"service": "checkout", "severity": "critical", "fired_minutes_ago": 3, "summary": "Elevated error rate on checkout"},
+    {"service": "db-primary", "severity": "warning", "fired_minutes_ago": 6, "summary": "Connection pool near saturation"}
+  ]
+}

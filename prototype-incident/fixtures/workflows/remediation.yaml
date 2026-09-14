@@ -1,0 +1,68 @@
+---
+schema_version: "2.0.0"
+name: incident-remediation
+description: |
+  Manually-triggered remediation for the incident-triage reference task. Runs an AAP
+  job template to actually fix the incident. This is the only node in the whole scenario
+  that references the AAP credential — the triage agent never sees it.
+triggers:
+  - id: trigger_manual
+    type: manual_trigger
+    parameters:
+      input_schema:
+        type: object
+        properties:
+          job_template_name:
+            type: string
+            description: AAP job template to launch, by exact name
+          limit:
+            type: string
+            description: Ansible --limit host pattern, e.g. the affected service's host group
+        required:
+          - job_template_name
+nodes:
+  - id: launch_job
+    type: aap_job_template
+    name: Launch AAP Remediation Job
+    parameters:
+      credential_id: "{{AAP_CREDENTIAL_ID}}"
+      integration_id: "{{AAP_INTEGRATION_ID}}"
+      # job_template_id (an integer field with no template-expression support in its
+      # JSON schema — confirmed live: "'${trigger.job_template_id}' is not of type
+      # 'integer'") can't take a per-invocation value here, unlike job_template_name
+      # (a plain string field). organization_name is resolved once at seed time
+      # (assumed constant across this reference task's job templates), not per-invocation.
+      job_template_name: ${trigger.job_template_name}
+      organization_name: "{{AAP_ORGANIZATION_NAME}}"
+      limit: ${trigger.limit}
+      verbosity: 0
+    outputs:
+      job_id: "${result.job_id}"
+      job_status: "${result.job_status}"
+      finished: "${result.finished}"
+    settings:
+      timeout: 1800
+      retry_policy:
+        max_retries: 2
+        initial_interval: 5
+        max_interval: 60
+        backoff_coefficient: 2.0
+  - id: summarize
+    type: agentic
+    name: Summarize Remediation
+    parameters:
+      prompt: |
+        Write a one-paragraph summary of the remediation action just taken, suitable for an
+        incident audit log. Job template "${trigger.job_template_name}" was launched (limit:
+        "${trigger.limit}", empty means no limit was applied). Result: job id
+        ${launch_job.job_id}, status ${launch_job.job_status}, finished at
+        ${launch_job.finished}. Use only the information above — do not call any tools or
+        speculate about anything not stated here.
+      llm_model_id: "{{LLM_MODEL_ID}}"
+      credential_id: "{{LLM_CREDENTIAL_ID}}"
+      tool_selection_strategy: "NONE"
+edges:
+  - from: trigger_manual
+    to: launch_job
+  - from: launch_job
+    to: summarize

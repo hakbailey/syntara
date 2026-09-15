@@ -43,22 +43,41 @@ type ServiceAccountSelectProps = Readonly<{
   selectedIds: string[]
   onChange: (ids: string[]) => void
   isDisabled?: boolean
+  projectId?: string | null
+  selectionMode?: 'multiple' | 'single'
+  enabled?: boolean
+  allowCreate?: boolean
 }>
 
-export function ServiceAccountSelect({ id, selectedIds, onChange, isDisabled }: ServiceAccountSelectProps) {
+export function ServiceAccountSelect({
+  id,
+  selectedIds,
+  onChange,
+  isDisabled,
+  projectId,
+  selectionMode = 'multiple',
+  enabled = true,
+  allowCreate = true,
+}: ServiceAccountSelectProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
   const { allowed: canCreate } = useCanI('create', 'service_account')
-  const projectId = useWorkflowStore((s) => s.projectId)
+  const workflowProjectId = useWorkflowStore((s) => s.projectId)
+  const selectedProjectId = projectId !== undefined ? projectId : workflowProjectId
 
-  const { serviceAccounts, isLoading, refetch } = useAllServiceAccounts(projectId)
+  const { serviceAccounts, isLoading, refetch } = useAllServiceAccounts(selectedProjectId, enabled)
 
   const selectedSAs = useMemo(
     () => serviceAccounts.filter((sa) => selectedIds.includes(sa.id)),
     [serviceAccounts, selectedIds]
   )
 
-  const toggleLabel = selectedSAs.length > 0 ? `${selectedSAs.length} selected` : 'Select service accounts'
+  let toggleLabel = 'Select service accounts'
+  if (selectionMode === 'single') {
+    toggleLabel = selectedSAs[0]?.name ?? 'Select service account'
+  } else if (selectedSAs.length > 0) {
+    toggleLabel = `${selectedSAs.length} selected`
+  }
 
   const handleSelect = useCallback(
     (_event: React.MouseEvent | undefined, value: string | number | undefined) => {
@@ -68,10 +87,15 @@ export function ServiceAccountSelect({ id, selectedIds, onChange, isDisabled }: 
         return
       }
       if (typeof value !== 'string') return
+      if (selectionMode === 'single') {
+        onChange([value])
+        setIsOpen(false)
+        return
+      }
       const updated = selectedIds.includes(value) ? selectedIds.filter((id) => id !== value) : [...selectedIds, value]
       onChange(updated)
     },
-    [selectedIds, onChange]
+    [selectedIds, onChange, selectionMode]
   )
 
   const handleRemove = useCallback(
@@ -85,10 +109,11 @@ export function ServiceAccountSelect({ id, selectedIds, onChange, isDisabled }: 
     (saId: string) => {
       detachPromise(refetch())
       if (!selectedIds.includes(saId)) {
-        onChange([...selectedIds, saId])
+        onChange(selectionMode === 'single' ? [saId] : [...selectedIds, saId])
       }
+      if (selectionMode === 'single') setIsCreateModalOpen(false)
     },
-    [selectedIds, onChange, refetch]
+    [selectedIds, onChange, refetch, selectionMode]
   )
 
   const renderToggle = useCallback(
@@ -110,7 +135,7 @@ export function ServiceAccountSelect({ id, selectedIds, onChange, isDisabled }: 
     <>
       <SynSelect isOpen={isOpen} onOpenChange={setIsOpen} onSelect={handleSelect} toggle={renderToggle}>
         <SelectList>
-          {canCreate && (
+          {allowCreate && canCreate && (
             <>
               <SelectOption value={CREATE_NEW_VALUE} icon={<RhUiAddIcon />}>
                 Create new service account
@@ -122,7 +147,7 @@ export function ServiceAccountSelect({ id, selectedIds, onChange, isDisabled }: 
             <SelectOption
               key={sa.id}
               value={sa.id}
-              hasCheckbox
+              hasCheckbox={selectionMode === 'multiple'}
               isSelected={selectedIds.includes(sa.id)}
               description={sa.description ?? undefined}
             >
@@ -137,7 +162,7 @@ export function ServiceAccountSelect({ id, selectedIds, onChange, isDisabled }: 
         </SelectList>
       </SynSelect>
 
-      {selectedSAs.length > 0 && (
+      {selectionMode === 'multiple' && selectedSAs.length > 0 && (
         <LabelGroup aria-label="Selected service accounts" style={{ marginTop: 'var(--pf-t--global--spacer--sm)' }}>
           {selectedSAs.map((sa) => (
             <SynLabel key={sa.id} onClose={isDisabled ? undefined : () => handleRemove(sa.id)}>
@@ -150,7 +175,7 @@ export function ServiceAccountSelect({ id, selectedIds, onChange, isDisabled }: 
         isOpen={isCreateModalOpen}
         onClose={() => setIsCreateModalOpen(false)}
         onCreated={handleCreated}
-        projectId={projectId ?? undefined}
+        projectId={selectedProjectId ?? undefined}
       />
     </>
   )

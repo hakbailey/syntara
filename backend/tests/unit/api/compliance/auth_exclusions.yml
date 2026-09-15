@@ -143,6 +143,23 @@ authenticated:
     path: /api/v1/workflows/validate
     justification: Stateless, side-effect-free validation of caller-supplied definition; no project_id/workflow_id to authorize against
 
+  # -- agent gate: service-account authentication and inline authorization --
+  - method: POST
+    path: /api/v1/agent-gate/mcp/{integration_id}/tools/{tool_name}/call
+    justification: Service-account bearer authentication with inline authorization for the caller-declared tool action
+
+  - method: POST
+    path: /api/v1/agent-gate/llm/{integration_id}/openai/v1/chat/completions
+    justification: Service-account bearer authentication and credential-scoped gate enforcement for brokered LLM calls
+
+  - method: POST
+    path: /api/v1/agent-gate/llm/{integration_id}/chat/completions
+    justification: Service-account bearer authentication and credential-scoped gate enforcement for brokered LLM calls
+
+  - method: POST
+    path: /api/v1/agent-gate/harness/invocations
+    justification: Service-account bearer authentication at the API-side relay boundary for sandbox harness traffic
+
 public:
   # -- auth: pre-authentication flow --
   - method: POST

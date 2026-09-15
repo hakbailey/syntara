@@ -58,7 +58,7 @@ from syntara.audit.context_managers import actor_context as audit_actor_context
 from syntara.audit.dispatcher import AuditEventDispatcher
 from syntara.audit.emitter import AuditActorContext
 from syntara.core.cache.stream import StreamClient
-from syntara.core.config.base import get_settings
+from syntara.core.config.base import Settings, get_settings
 from syntara.core.database.session import get_db
 from syntara.core.models import User
 from syntara.core.models.principal import PrincipalType
@@ -136,7 +136,13 @@ class InvocationExecutor:
         self.get_async_session_context = contextlib.asynccontextmanager(session_factory)
 
     async def _get_actor_context_for_invocation(self, invocation: Invocation) -> AuditActorContext:
-        """Get AuditActorContext for an invocation's creator.
+        """Get the effective actor context for an invocation.
+
+        A workflow-triggered invocation is created by the human who started the
+        parent workflow, but it may be configured to execute as a service
+        account. That runtime identity is stored in ``context_data`` because
+        the built-in Agent Execution workflow does not preserve arbitrary actor
+        fields when invoking this executor.
 
         Args:
             invocation: Invocation being executed
@@ -145,6 +151,24 @@ class InvocationExecutor:
             ActorContext with atomic actor_id and actor_username
 
         """
+        raw_runtime_service_account_id = (invocation.context_data or {}).get("runtime_service_account_id")
+        if isinstance(raw_runtime_service_account_id, str) and raw_runtime_service_account_id:
+            try:
+                runtime_service_account_id = UUID(raw_runtime_service_account_id)
+            except ValueError:
+                logger.warning(
+                    "Ignoring malformed runtime service-account ID on invocation",
+                    invocation_id=invocation.id,
+                    runtime_service_account_id=raw_runtime_service_account_id,
+                )
+            else:
+                service_account = await self._load_service_account_for_actor_context(runtime_service_account_id)
+                return AuditActorContext(
+                    actor_id=runtime_service_account_id,
+                    actor_username=service_account.name if service_account else None,
+                    actor_type=PrincipalType.SERVICE_ACCOUNT,
+                )
+
         user = await self._load_user_for_actor_context(invocation.created_by)
         if user:
             return AuditActorContext(
@@ -695,7 +719,7 @@ class InvocationExecutor:
                 exc_info=True,
             )
 
-    async def _init_orchestration(  # noqa: PLR0915
+    async def _init_orchestration(
         self,
         invocation: Invocation,
         ctx: InvocationContextData,
@@ -719,7 +743,7 @@ class InvocationExecutor:
             await self._validate_credentials_eagerly(meta, invocation.project_id)
 
             settings = get_settings()
-            engine = settings.agent_runtime_engine
+            engine = ctx.runtime_engine or settings.agent_runtime_engine
             raw_credential_id = meta.credential_id.get_secret_value() if meta and meta.credential_id else None
             credential_api_key: str | None = None
             if raw_credential_id and engine == "in_process":
@@ -744,25 +768,29 @@ class InvocationExecutor:
                     invocation_id=invocation.id,
                 )
 
-            llm_integration_id: UUID | None = None
-            gate_token: str | None = None
+            sandbox_options: dict[str, Any] | None = None
             if engine == "sandboxed":
-                if not raw_credential_id or not meta or not meta.llm_model_id or resolved_model is None:
-                    msg = "Sandboxed runtime requires an LLM model and credential reference."
-                    raise LLMConfigurationError(msg)  # noqa: TRY301
-                if actor_context is None:
-                    actor_context = await self._get_actor_context_for_invocation(invocation)
-                gate_token = await self._issue_gate_token(actor_context)
-                llm_integration_id = await self._resolve_llm_integration_id(meta.llm_model_id)
-                llm, llm_http_client = await get_openrouter_llm(
-                    api_key=gate_token,
-                    base_url=f"{str(settings.agent_gate_base_url).rstrip('/')}/llm/{llm_integration_id}/openai/v1",
-                    model=resolved_model,
-                    default_headers={
-                        "X-Syntara-Credential-ID": raw_credential_id,
-                        "X-Syntara-Session-ID": invocation.session_id,
-                        "X-Syntara-Invocation-ID": str(invocation.id),
-                    },
+                (
+                    llm,
+                    llm_http_client,
+                    gate_token,
+                    llm_integration_id,
+                ) = await self._initialize_sandboxed_llm(
+                    invocation=invocation,
+                    meta=meta,
+                    settings=settings,
+                    raw_credential_id=raw_credential_id,
+                    resolved_model=resolved_model,
+                    actor_context=actor_context,
+                )
+                sandbox_options = self._build_sandbox_options(
+                    gate_token=gate_token,
+                    llm_integration_id=llm_integration_id,
+                    raw_credential_id=raw_credential_id,
+                    resolved_model=resolved_model,
+                    settings=settings,
+                    invocation=invocation,
+                    meta=meta,
                 )
             else:
                 llm, llm_http_client = await get_openrouter_llm(
@@ -802,23 +830,6 @@ class InvocationExecutor:
                 tool_selections=list(meta.tool_selections) if meta else [],
                 session_factory=self.session_factory,
             )
-            sandbox_options: dict[str, Any] | None = None
-            if engine == "sandboxed":
-                assert gate_token is not None  # noqa: S101 -- narrowed by branch above
-                assert llm_integration_id is not None  # noqa: S101 -- narrowed by branch above
-                assert raw_credential_id is not None  # noqa: S101 -- narrowed by branch above
-                sandbox_options = {
-                    "harness_relay_url": str(settings.agent_gate_base_url),
-                    "gate_token": gate_token,
-                    "model_name": resolved_model,
-                    "llm_integration_id": llm_integration_id,
-                    "llm_credential_id": raw_credential_id,
-                    "project_id": invocation.project_id,
-                    "integration_credentials": {
-                        UUID(connection.integration_id): connection.credential_id
-                        for connection in (meta.integration_connections if meta else []) or []
-                    },
-                }
             agent_runtime = get_agent_runtime(service, engine=engine, sandbox_options=sandbox_options)
             logger.info("LLM initialized successfully for invocation", invocation_id=invocation.id)
             return agent_runtime, llm_http_client
@@ -843,6 +854,62 @@ class InvocationExecutor:
             logger.exception("Invocation failed", invocation_id=invocation.id, error_message=str(e))
             await WorkflowSignalClient.send_failure_signal(cb_url, invocation.id, e)
             return None
+
+    async def _initialize_sandboxed_llm(
+        self,
+        *,
+        invocation: Invocation,
+        meta: InvocationMetadata | None,
+        settings: Settings,
+        raw_credential_id: str | None,
+        resolved_model: str | None,
+        actor_context: AuditActorContext | None,
+    ) -> "tuple[Any, httpx.AsyncClient | None, str, UUID]":
+        """Initialise the gate-backed LLM client and sandbox credentials."""
+        if not raw_credential_id or not meta or not meta.llm_model_id or resolved_model is None:
+            msg = "Sandboxed runtime requires an LLM model and credential reference."
+            raise LLMConfigurationError(msg)
+        if actor_context is None:
+            actor_context = await self._get_actor_context_for_invocation(invocation)
+
+        gate_token = await self._issue_gate_token(actor_context)
+        llm_integration_id = await self._resolve_llm_integration_id(meta.llm_model_id)
+        llm, llm_http_client = await get_openrouter_llm(
+            api_key=gate_token,
+            base_url=f"{str(settings.agent_gate_base_url).rstrip('/')}/llm/{llm_integration_id}/openai/v1",
+            model=resolved_model,
+            default_headers={
+                "X-Orchestrator-Credential-ID": raw_credential_id,
+                "X-Orchestrator-Session-ID": invocation.session_id,
+                "X-Orchestrator-Invocation-ID": str(invocation.id),
+            },
+        )
+        return llm, llm_http_client, gate_token, llm_integration_id
+
+    @staticmethod
+    def _build_sandbox_options(
+        *,
+        gate_token: str,
+        llm_integration_id: UUID,
+        raw_credential_id: str,
+        resolved_model: str | None,
+        settings: Settings,
+        invocation: Invocation,
+        meta: InvocationMetadata | None,
+    ) -> dict[str, Any]:
+        """Build the options passed to the sandboxed agent runtime."""
+        return {
+            "harness_relay_url": str(settings.agent_gate_base_url),
+            "gate_token": gate_token,
+            "model_name": resolved_model,
+            "llm_integration_id": llm_integration_id,
+            "llm_credential_id": raw_credential_id,
+            "project_id": invocation.project_id,
+            "integration_credentials": {
+                UUID(connection.integration_id): connection.credential_id
+                for connection in (meta.integration_connections if meta else []) or []
+            },
+        }
 
     @staticmethod
     def _record_invocation_metrics(

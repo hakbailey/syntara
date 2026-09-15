@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { RUNTIME_ENGINE_VALUES } from '../components/runtimeEngine'
+
 import { nodeSettingsSchema } from './shared/nodeSettingsSchema'
 
 /**
@@ -11,6 +13,7 @@ export const aiAgentFormSchema = z
     name: z.string(),
     llm_model_id: z.string().optional(),
     prompt: z.string().optional(),
+    runtime_engine: z.enum(RUNTIME_ENGINE_VALUES).optional(),
     tool_selection_strategy: z.enum(['ALL', 'NONE', 'SELECTED']).optional(),
     tool_selections: z.array(z.string()).optional(),
     integration_connections: z.array(z.object({ integration_id: z.string(), credential_id: z.string() })).optional(),

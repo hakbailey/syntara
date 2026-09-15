@@ -148,6 +148,26 @@ class TestAgentOrchestratorClientFileIds:
         assert invocation_id == "inv_test_123"
 
     @pytest.mark.asyncio
+    async def test_invoke_agent_with_runtime_service_account(self) -> None:
+        """Test that the selected service account is forwarded in contextData."""
+        captured_payload: dict[str, Any] = {}
+        async with AgentOrchestratorClient(max_retries=0) as client:
+            client.http_client.post = AsyncMock(  # type: ignore[method-assign]
+                side_effect=create_payload_capturing_mock(captured_payload)
+            )
+
+            await client.invoke_agent_async(
+                prompt="Use the sandbox",
+                user_id=generate_valid_uuid(),
+                project_id=generate_valid_uuid(),
+                runtime_service_account_id=generate_valid_uuid(),
+                runtime_engine="sandboxed",
+            )
+
+        assert captured_payload["contextData"]["runtime_service_account_id"]
+        assert captured_payload["contextData"]["runtime_engine"] == "sandboxed"
+
+    @pytest.mark.asyncio
     async def test_invoke_agent_without_file_ids(self) -> None:
         """Test that file_ids is omitted from payload when not provided."""
         captured_payload: dict[str, Any] = {}

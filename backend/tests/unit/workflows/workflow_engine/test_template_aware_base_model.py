@@ -50,9 +50,11 @@ class TestTemplateAwareBaseModel:
         config = AgenticExecutorParameters(
             prompt="Analyze this data",  # Literal string
             agent="${input.agent}",  # Template string
+            runtime_engine="sandboxed",
         )
         assert config.prompt == "Analyze this data"
         assert config.agent == "${input.agent}"
+        assert config.runtime_engine == "sandboxed"
 
         # Template in constrained int field bypasses validation
         model = _IntModel(count="${input.count}")  # type: ignore[arg-type]  # Would fail if literal > 3600

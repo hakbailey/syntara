@@ -1,3 +1,4 @@
+import { FormGroup, HelperText, HelperTextItem, Stack, StackItem } from '@patternfly/react-core'
 import type { WorkflowAPI } from '@syntara/contracts'
 import { useCallback, useState } from 'react'
 
@@ -8,7 +9,10 @@ import { detachPromise } from '../../utils/detachPromise'
 import type { ProjectRead } from '../access/types'
 import { ProjectFormModal } from '../access-management/ProjectFormModal'
 import { ProjectDeleteDialog } from '../access-management/projects/ProjectDeleteDialog'
+import type { RuntimeEngine } from '../builder/components/runtimeEngine'
+import { RuntimeEngineSelect } from '../builder/components/RuntimeEngineSelect'
 import { RunWorkflowModal } from '../builder/components/RunWorkflowModal'
+import { ServiceAccountSelect } from '../builder/node-forms/ServiceAccountSelect'
 import { PublishWorkflowDialog } from '../builder/PublishWorkflowDialog'
 import { hasNonEmptyInputSchema } from '../builder/utils/triggerReferenceCheck'
 
@@ -21,6 +25,122 @@ type Workflow = WorkflowAPI.components['schemas']['WorkflowRead']
 type PendingRunInput = {
   workflow: Workflow
   trigger: WorkflowRunTrigger
+  serviceAccountId: string | null
+  runtimeEngine: RuntimeEngine | undefined
+}
+
+type WorkflowRunOptions = {
+  serviceAccountId?: string
+  runtimeEngine?: RuntimeEngine
+}
+
+function RunModeField({
+  value,
+  onChange,
+  enabled,
+}: Readonly<{
+  value: RuntimeEngine | undefined
+  onChange: (value: RuntimeEngine | undefined) => void
+  enabled: boolean
+}>) {
+  return (
+    <FormGroup label="Agent runtime" fieldId="workflow-runtime-engine">
+      <RuntimeEngineSelect
+        id="workflow-runtime-engine"
+        value={value}
+        onChange={onChange}
+        isDisabled={!enabled}
+        ariaLabel="Agent runtime"
+      />
+      <HelperText>
+        <HelperTextItem>Overrides the deployment default for agent steps in this workflow run.</HelperTextItem>
+      </HelperText>
+    </FormGroup>
+  )
+}
+
+function RunAsServiceAccountField({
+  selectedId,
+  onChange,
+  projectId,
+  enabled,
+}: Readonly<{
+  selectedId: string | null
+  onChange: (id: string | null) => void
+  projectId?: string | null
+  enabled: boolean
+}>) {
+  return (
+    <FormGroup label="Run as service account (optional)" fieldId="workflow-runtime-service-account">
+      <ServiceAccountSelect
+        id="workflow-runtime-service-account"
+        selectedIds={selectedId ? [selectedId] : []}
+        onChange={(ids) => onChange(ids[0] ?? null)}
+        projectId={projectId}
+        selectionMode="single"
+        enabled={enabled && Boolean(projectId)}
+        allowCreate={false}
+      />
+      <HelperText>
+        <HelperTextItem>
+          Required for sandboxed agent steps; the human requester remains the audit owner.
+        </HelperTextItem>
+      </HelperText>
+    </FormGroup>
+  )
+}
+
+function WorkflowRunConfirmation({
+  isOpen,
+  onClose,
+  onConfirm,
+  confirmLoading,
+  workflowName,
+  runtimeEngine,
+  onRuntimeEngineChange,
+  serviceAccountId,
+  onServiceAccountChange,
+  projectId,
+}: Readonly<{
+  isOpen: boolean
+  onClose: () => void
+  onConfirm: () => void
+  confirmLoading: boolean
+  workflowName?: string
+  runtimeEngine: RuntimeEngine | undefined
+  onRuntimeEngineChange: (value: RuntimeEngine | undefined) => void
+  serviceAccountId: string | null
+  onServiceAccountChange: (value: string | null) => void
+  projectId?: string | null
+}>) {
+  return (
+    <SynConfirmationDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      onConfirm={onConfirm}
+      title={`Run ${workflowName}?`}
+      confirmLabel="Run now"
+      confirmLoading={confirmLoading}
+    >
+      <Stack hasGutter>
+        <StackItem>
+          You are about to manually run this workflow. This action will start the workflow immediately, bypassing its
+          normal trigger conditions.
+        </StackItem>
+        <StackItem>
+          <RunModeField value={runtimeEngine} onChange={onRuntimeEngineChange} enabled={isOpen} />
+        </StackItem>
+        <StackItem>
+          <RunAsServiceAccountField
+            selectedId={serviceAccountId}
+            onChange={onServiceAccountChange}
+            projectId={projectId}
+            enabled={isOpen && runtimeEngine !== 'in_process'}
+          />
+        </StackItem>
+      </Stack>
+    </SynConfirmationDialog>
+  )
 }
 
 /**
@@ -44,7 +164,12 @@ type WorkflowDialogsProps = {
   /** Dialog state for project deletion confirmation */
   projectDeleteDialog: DialogState<ProjectRead>
   /** Handler to execute a workflow with optional trigger inputs */
-  onRunWorkflow: (workflow: Workflow, inputData?: Record<string, unknown>, triggerNodeId?: string) => void
+  onRunWorkflow: (
+    workflow: Workflow,
+    inputData?: Record<string, unknown>,
+    triggerNodeId?: string,
+    runOptions?: WorkflowRunOptions
+  ) => void
   /** Handler to delete a workflow - dialog closes in onSettled callback */
   onDeleteWorkflow: (workflow: Workflow) => void
   /** Handler to publish a workflow - dialog closes in onSettled callback */
@@ -88,13 +213,35 @@ export function WorkflowDialogs({
   const { showError } = useAlerts()
   const [isResolvingRun, setIsResolvingRun] = useState(false)
   const [pendingRunInput, setPendingRunInput] = useState<PendingRunInput | null>(null)
+  const [runtimeServiceAccountId, setRuntimeServiceAccountId] = useState<string | null>(null)
+  const [runtimeEngine, setRuntimeEngine] = useState<RuntimeEngine | undefined>()
 
   const closeRunInput = useCallback(() => {
     setPendingRunInput(null)
   }, [])
 
-  const closeRunDialog = runDialog.close
+  const closeRunDialog = useCallback(() => {
+    setRuntimeServiceAccountId(null)
+    setRuntimeEngine(undefined)
+    runDialog.close()
+  }, [runDialog])
   const workflowToRun = runDialog.item
+
+  const runWithOptionalServiceAccount = useCallback(
+    (
+      workflow: Workflow,
+      inputData: Record<string, unknown>,
+      triggerNodeId: string | undefined,
+      serviceAccountId: string | null,
+      selectedRuntimeEngine: RuntimeEngine | undefined
+    ) => {
+      const runOptions: WorkflowRunOptions = {}
+      if (serviceAccountId) runOptions.serviceAccountId = serviceAccountId
+      if (selectedRuntimeEngine) runOptions.runtimeEngine = selectedRuntimeEngine
+      onRunWorkflow(workflow, inputData, triggerNodeId, Object.keys(runOptions).length > 0 ? runOptions : undefined)
+    },
+    [onRunWorkflow]
+  )
 
   const handleConfirmRun = useCallback(() => {
     if (!workflowToRun) return
@@ -110,12 +257,23 @@ export function WorkflowDialogs({
           }
 
           if (!trigger.hasTriggerReferences && !hasNonEmptyInputSchema(trigger.inputSchema)) {
-            onRunWorkflow(workflowToRun, {}, trigger.triggerNodeId)
+            runWithOptionalServiceAccount(
+              workflowToRun,
+              {},
+              trigger.triggerNodeId,
+              runtimeServiceAccountId,
+              runtimeEngine
+            )
             closeRunDialog()
             return
           }
 
-          setPendingRunInput({ workflow: workflowToRun, trigger })
+          setPendingRunInput({
+            workflow: workflowToRun,
+            trigger,
+            serviceAccountId: runtimeServiceAccountId,
+            runtimeEngine,
+          })
           closeRunDialog()
         })
         .catch((error: unknown) => {
@@ -129,30 +287,40 @@ export function WorkflowDialogs({
           setIsResolvingRun(false)
         })
     )
-  }, [closeRunDialog, onRunWorkflow, showError, workflowToRun])
+  }, [closeRunDialog, runWithOptionalServiceAccount, runtimeEngine, runtimeServiceAccountId, showError, workflowToRun])
 
   const handleRunWithInputs = useCallback(
     (inputData: Record<string, unknown>, triggerNodeId?: string) => {
       if (!pendingRunInput) return
-      onRunWorkflow(pendingRunInput.workflow, inputData, triggerNodeId ?? pendingRunInput.trigger.triggerNodeId)
+      runWithOptionalServiceAccount(
+        pendingRunInput.workflow,
+        inputData,
+        triggerNodeId ?? pendingRunInput.trigger.triggerNodeId,
+        pendingRunInput.serviceAccountId,
+        pendingRunInput.runtimeEngine
+      )
       setPendingRunInput(null)
     },
-    [onRunWorkflow, pendingRunInput]
+    [pendingRunInput, runWithOptionalServiceAccount]
   )
 
   return (
     <>
-      <SynConfirmationDialog
+      <WorkflowRunConfirmation
         isOpen={runDialog.isOpen}
-        onClose={runDialog.close}
+        onClose={closeRunDialog}
         onConfirm={handleConfirmRun}
-        title={`Run ${runDialog.item?.name}?`}
-        confirmLabel="Run now"
         confirmLoading={isResolvingRun}
-      >
-        You are about to manually run this workflow. This action will start the workflow immediately, bypassing its
-        normal trigger conditions.
-      </SynConfirmationDialog>
+        workflowName={workflowToRun?.name}
+        runtimeEngine={runtimeEngine}
+        onRuntimeEngineChange={(value) => {
+          setRuntimeEngine(value)
+          if (value === 'in_process') setRuntimeServiceAccountId(null)
+        }}
+        serviceAccountId={runtimeServiceAccountId}
+        onServiceAccountChange={setRuntimeServiceAccountId}
+        projectId={workflowToRun?.project_id}
+      />
 
       <RunWorkflowModal
         key={pendingRunInput ? `open-${pendingRunInput.trigger.triggerNodeId}` : 'closed'}

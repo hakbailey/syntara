@@ -45,6 +45,24 @@ sequenceDiagram
 
 All pre-invocation failures (empty/oversized prompt, unreachable orchestrator, validation errors) are **non-retryable** — retrying after dispatch would risk a duplicate agent invocation. Post-dispatch failures are handled by the orchestrator's own logic and signaled back via the callback.
 
+## Runtime Selection and Identity
+
+Runtime selection is deliberately carried as invocation context rather than encoded as a separate Temporal workflow or activity type. `OrchestratorWorkflow` resolves node parameters immediately before dispatch; a node's `runtime_engine` wins over the execution's `workflow_context.execution.runtime_engine`, and absent both the Agent Orchestrator uses the deployment setting `agent_runtime_engine`.
+
+```mermaid
+flowchart LR
+    Node["AgenticExecutorParameters"] --> Resolve["_dispatch_node_to_executor()"]
+    Run["workflow_context.execution"] --> Resolve
+    Resolve --> Activity["execute_agentic_activity()"]
+    Activity --> Payload["AgentOrchestratorClient<br/>contextData"]
+    Payload --> Context["InvocationContextData"]
+    Context --> Select["InvocationExecutor<br/>runtime selection"]
+    Select --> InProcess["InProcessRuntime"]
+    Select --> Sandboxed["SandboxedRuntime + governance gate"]
+```
+
+The same path carries `runtime_service_account_id`. Sandboxed initialization requires an LLM model/credential reference and calls `_issue_gate_token()` with a service-account actor; a missing, disabled, or uncredentialed service account becomes an LLM configuration failure before the agent loop starts. In-process initialization resolves the configured LLM directly and does not use the sandbox gate. External invocation clients cannot set these fields because the invocation router strips them unless the request uses the internal service-to-service authentication path.
+
 ## Context Window Management
 
 When the orchestrator receives an invocation, it runs a **Retrieve → Assemble** pipeline before calling the LLM. This happens inside `ContextManagerPlanner.plan_request()`.
@@ -127,6 +145,8 @@ The agentic activity sends `HEARTBEAT_STOP_MONITOR: True` immediately at dispatc
 
 **Integration connections override management credentials at execution time.** Each `IntegrationConnectionConfig` pairs an `integration_id` with a `credential_id`, allowing the workflow author to substitute a different credential for a specific integration during this execution. Integrations not listed are treated as unauthenticated — the management credential is reserved for tool discovery and health checks and is never used during workflow execution. Credential UUIDs are passed, not secrets.
 
+**Runtime overrides are layered, not global-only.** A workflow-level override provides a predictable default for a run, while a node-level override allows a workflow to mix in-process and sandboxed agent nodes. Both remain orthogonal to graph dispatch and async completion, so changing the runtime does not change callback or output-mapping behavior.
+
 Parameters are defined by `AgenticExecutorParameters` in `workflow_definition.py`; see that model (or the JSON Schema under `schemas/workflows/v2/executors/`) for the current field list rather than a copy here.
 
 ## Accessing Results
@@ -138,5 +158,7 @@ Downstream nodes access agentic output via the expression system: `${node_id.out
 - [Workflow Engine Architecture](workflow-engine-overview.md) — shared dispatch and async-completion mechanics
 - [Expression System](expression-system.md) — how `${...}` expressions inject data into prompts
 - [Credentials](../credential.md) — credential system for LLM API keys
+- [Execution Runtime](../execution-runtime.md) — workflow-level runtime selection and execution metadata
+- [Service Accounts](../service-accounts.md) — service-account lifecycle and sandbox runtime identity
 - [Node Settings](node-settings.md) — timeout and retry tiers (`NodeSettingsNoRetry`)
 - [Retry Policies](retry-policies.md) — why the agentic node is excluded from the retry tier

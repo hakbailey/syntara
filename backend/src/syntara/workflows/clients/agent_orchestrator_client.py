@@ -219,6 +219,8 @@ class AgentOrchestratorClient:
         metadata: dict[str, Any] | None,
         project_id: str,
         timeout_seconds: int | None = None,
+        runtime_service_account_id: str | None = None,
+        runtime_engine: str | None = None,
     ) -> dict[str, Any]:
         """Build the request payload for agent invocation.
 
@@ -233,6 +235,8 @@ class AgentOrchestratorClient:
             metadata: Optional metadata (callback_url will be extracted to top level)
             project_id: Project ID to include in the payload
             timeout_seconds: Optional timeout in seconds for the agent execution
+            runtime_service_account_id: Optional service account for sandboxed agent steps
+            runtime_engine: Optional runtime override for this agent step
 
         Returns:
             Request payload dictionary
@@ -271,6 +275,8 @@ class AgentOrchestratorClient:
                     "execution_id": execution_id,
                     "callback_url": callback_url,
                     "timeout_seconds": timeout_seconds,
+                    "runtime_service_account_id": runtime_service_account_id,
+                    "runtime_engine": runtime_engine,
                     "metadata": metadata,
                 }.items()
                 if v is not None
@@ -366,6 +372,8 @@ class AgentOrchestratorClient:
         file_ids: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         timeout_seconds: int | None = None,
+        runtime_service_account_id: str | None = None,
+        runtime_engine: str | None = None,
     ) -> str:
         """Invoke Agent Orchestrator asynchronously and return immediately with invocation ID.
 
@@ -384,6 +392,8 @@ class AgentOrchestratorClient:
             file_ids: Optional list of file IDs to include as context
             metadata: Optional additional metadata (should include callback_url)
             timeout_seconds: Optional timeout in seconds for the agent execution
+            runtime_service_account_id: Optional service account for sandboxed agent steps
+            runtime_engine: Optional runtime override for this agent step
 
         Returns:
             str: The invocation ID for tracking
@@ -405,7 +415,18 @@ class AgentOrchestratorClient:
 
         # Build request payload
         payload = self._build_invocation_payload(
-            prompt, user_id, session_id, agent, model, input_data, file_ids, metadata, project_id, timeout_seconds
+            prompt,
+            user_id,
+            session_id,
+            agent,
+            model,
+            input_data,
+            file_ids,
+            metadata,
+            project_id,
+            timeout_seconds,
+            runtime_service_account_id,
+            runtime_engine,
         )
 
         # Invoke with retry logic for transient failures

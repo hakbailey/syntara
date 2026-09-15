@@ -608,6 +608,22 @@ The builder edits nodes + edges directly in the Zustand store. On save, `buildWo
 5. Submit to API via mutation
 ```
 
+### Runtime choice for agentic execution
+
+Runtime selection is intentionally split between saved workflow state and per-run controls. The AI Agent form persists a node-level `runtime_engine` in the v2 activity parameters. The workflow-list and builder run dialogs keep the workflow-level selection local to that run and send it with the execution request; choosing a run mode does not mutate the saved workflow. The backend applies node override → workflow-run override → deployment default. The service-account selector is enabled for sandboxed runs and disabled for in-process runs because sandboxed execution requires a service-account principal.
+
+```mermaid
+flowchart LR
+    Form["AI Agent form"] --> Definition["Saved workflow node"]
+    Dialog["Run dialog"] --> Execution["Execution request"]
+    Definition --> Backend["Backend runtime precedence"]
+    Execution --> Backend
+    Backend --> InProcess["In-process"]
+    Backend --> Sandboxed["Sandboxed + service account"]
+```
+
+The UI uses generated OpenAPI types for both fields, while the backend carries the selected values through Temporal metadata and internal invocation context. See [Agentic Node — Runtime Selection and Identity](../../backend/docs/workflow-engine/agentic-node.md#runtime-selection-and-identity) for the cross-service propagation and [Execution Runtime](../../backend/docs/execution-runtime.md#agent-runtime-selection) for the run-level behavior.
+
 ### Key files
 
 | File                                              | Responsibility                                                                                                           |

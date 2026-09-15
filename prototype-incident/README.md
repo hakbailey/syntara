@@ -81,7 +81,7 @@ For the broader runtime check, run:
 make verify-a4
 ```
 
-This validates the seccomp profile and harness boundary, exercises the gate with an allowed and denied request, runs a real webhook-triggered triage, checks that configured provider secrets do not appear in the harness or execution history, runs callback-free standalone parity, approves the recommendation, and verifies that the remediation workflow launches the expected AAP job. It requires the seeded AAP and LLM dependencies. If a specific external dependency is unavailable, run `uv run --project ../backend python verify_prototype_a.py --skip-standalone` or `--skip-remediation` and treat the skipped check as incomplete evidence rather than a pass.
+This validates the seccomp profile and harness boundary, exercises the gate with an allowed and denied request, runs a real webhook-triggered sandboxed triage, checks that configured provider secrets do not appear in the harness or execution history, runs callback-free parity through explicit in-process and sandboxed overrides plus both deployment defaults, approves the recommendation, and verifies that the remediation workflow launches the expected AAP job. It requires the seeded AAP and LLM dependencies. If a specific external dependency is unavailable, run `uv run --project ../backend python verify_prototype_a.py --skip-standalone` or `--skip-remediation` and treat the skipped check as incomplete evidence rather than a pass.
 
 To run only the static seccomp check:
 
@@ -146,7 +146,7 @@ uv run --project ../backend python run_standalone.py \
   --result-out /tmp/triage-standalone.json
 ```
 
-Use `--compare-to /tmp/triage-webhook.json` to compare the stable remediation fields with a saved webhook result. Run this command from a worker-capable environment with access to the same database, Redis, gate URL, and TLS settings; never run it from inside the agent harness.
+Use `--compare-to /tmp/triage-webhook.json` to compare the stable remediation fields with a saved webhook result. Add `--runtime-engine in_process` or `--runtime-engine sandboxed` to override the invocation context, or use `--deployment-default` to remove the invocation override and follow `APP_AGENT_RUNTIME_ENGINE`. Run this command from a worker-capable environment with access to the same database, Redis, gate URL, and TLS settings; never run it from inside the agent harness.
 
 ## Known limitations
 

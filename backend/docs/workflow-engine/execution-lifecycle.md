@@ -96,9 +96,9 @@ sequenceDiagram
     participant Temporal
 
     Client->>API: POST /executions/{id}/retry
-    API->>DB: Load original execution + workflow version
+    API->>DB: Load original execution + workflow version + runtime metadata
     API->>API: Validate: terminal status, not test, workflow exists, version exists
-    API->>Temporal: Start new workflow (same version's definition)
+    API->>Temporal: Start new workflow (same version, inputs, runtime metadata)
     Temporal-->>API: temporal_workflow_id
     API->>DB: INSERT new execution (retried_from_execution_id = original.id)
     API-->>Client: 201 Created (new ExecutionRead)
@@ -118,6 +118,10 @@ Test executions use `pre_resolved_nodes` (mocked predecessor data) and `stop_aft
 
 The `retried_from_execution_id` FK on `Execution` tracks which execution spawned which. This is a simple parent pointer, not a chain — retrying a retry creates `C → B` and `B → A`, not `C → A`. This keeps queries simple and avoids needing recursive traversal.
 
+### Runtime metadata is preserved on retry
+
+A retry preserves the original run's runtime metadata alongside its workflow version, inputs, and trigger context. This means a sandboxed run remains sandboxed and retains its selected service-account identity when retried; a node-level runtime override remains part of the workflow definition. Older executions without runtime metadata fall back to the deployment default, preserving compatibility with runs created before runtime selection was added.
+
 ## Execution Modes
 
 Executions have a `mode` field (see `ExecutionMode` enum) that distinguishes how they were created:
@@ -135,6 +139,8 @@ Mode affects behavior across the system:
 - **UI**: Test runs show a distinct label in run history
 - **Filtering**: Mode is a filterable field on the list executions API
 
+Execution mode and agent runtime are independent axes: `standard`, `test`, and `debug` describe how the execution was created, while `in_process` and `sandboxed` describe where agentic nodes run. Runtime metadata does not make a test execution retryable and does not change the execution-mode filters.
+
 ## Design Decision: Dynamic `now` / `today` Resolution
 
 `now` and `today` are **not** included in the workflow context at execution creation time. They are resolved dynamically by the workflow engine at each node execution, so they reflect wall-clock time when the node actually runs — not when the execution was created. Users who need the execution start time can use `${workflow_context.execution.created_at}`.
@@ -148,3 +154,9 @@ Mode affects behavior across the system:
 | `workflows/workflow_engine/services/activity_sync_service.py` | Polls Temporal, propagates state to DB/Redis/WebSocket |
 | `workflows/models/execution.py` | `Execution` model, `ExecutionStatus`, `ExecutionMode`, `TERMINAL_EXECUTION_STATUSES` |
 | `workflows/exceptions.py` | `ExecutionInTerminalStateError`, `ExecutionNotRetryableError` |
+
+## Related Documentation
+
+- [Execution Runtime](../execution-runtime.md) — workflow-level runtime selection and execution metadata
+- [Agentic Node](agentic-node.md) — node dispatch, runtime propagation, and sandbox identity
+- [Workflow Engine Architecture](workflow-engine-overview.md) — graph dispatch and async completion

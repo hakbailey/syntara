@@ -10,6 +10,7 @@ import { getErrorMessage } from '../../../utils/apiErrors'
 import { formatDateTime } from '../../../utils/dateUtils'
 import { detachPromise } from '../../../utils/detachPromise'
 import type { BuilderAction } from '../builderReducer'
+import type { RuntimeEngine } from '../components/runtimeEngine'
 import { DEFAULT_MAX_WAIT_SECONDS, fetchMaxWaitDuration } from '../node-forms/useMaxWaitDuration'
 import { validateWorkflow } from '../utils/validation'
 import { validateMinimumWorkflow } from '../utils/validation/rules/validateMinimumWorkflow'
@@ -44,7 +45,15 @@ async function checkVersionConflictBeforeRun(
 }
 
 type ExecuteWorkflowMutate = (
-  variables: { body: { workflow_id: string; input_data?: Record<string, unknown>; trigger_node_id: string } },
+  variables: {
+    body: {
+      workflow_id: string
+      input_data?: Record<string, unknown>
+      trigger_node_id: string
+      service_account_id?: string
+      runtime_engine?: RuntimeEngine
+    }
+  },
   options?: {
     onSuccess?: (data: { id?: string }) => void
     onError?: (error: unknown) => void
@@ -107,7 +116,11 @@ export function useBuilderToolbarHandlers({
     async (
       inputData?: Record<string, unknown>,
       triggerNodeId?: string,
-      runOptions?: { skipPreflightCheck?: boolean }
+      runOptions?: {
+        skipPreflightCheck?: boolean
+        runtimeServiceAccountId?: string
+        runtimeEngine?: RuntimeEngine
+      }
     ) => {
       if (!workflow?.id) return
 
@@ -181,6 +194,8 @@ export function useBuilderToolbarHandlers({
             workflow_id: workflow.id,
             input_data: inputData ?? {},
             trigger_node_id: triggerNodeId ?? '',
+            ...(runOptions?.runtimeServiceAccountId ? { service_account_id: runOptions.runtimeServiceAccountId } : {}),
+            ...(runOptions?.runtimeEngine ? { runtime_engine: runOptions.runtimeEngine } : {}),
           },
         },
         {

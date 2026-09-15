@@ -847,6 +847,22 @@ components:
           title: Use Published
           description: If true, run the published version instead of the current version
           default: false
+        service_account_id:
+          anyOf:
+            - format: uuid
+              type: string
+            - type: "null"
+          title: Service Account Id
+          description: Optional service account to use for sandboxed agent steps
+        runtime_engine:
+          anyOf:
+            - enum:
+                - in_process
+                - sandboxed
+              type: string
+            - type: "null"
+          title: Runtime Engine
+          description: Optional agent runtime override; unset uses the deployment default
 
     PreResolvedNodeOutput:
       type: object
@@ -1979,6 +1995,15 @@ components:
             - type: string
             - type: 'null'
           title: Agent
+        runtime_engine:
+          anyOf:
+            - enum:
+                - in_process
+                - sandboxed
+              type: string
+            - type: 'null'
+          title: Runtime Engine
+          description: Optional runtime override; unset uses the workflow or deployment default
         llm_model_id:
           anyOf:
             - type: string

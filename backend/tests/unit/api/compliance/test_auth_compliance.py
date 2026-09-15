@@ -23,6 +23,7 @@ import pytest
 import yaml
 from fastapi import FastAPI
 
+from syntara.agent_orchestrator.gate_router import get_gate_caller
 from syntara.api.constants import API_V1_PATH_PREFIX
 from syntara.auth.dependencies import get_current_user, get_token_payload
 from syntara.authz.dependencies import PermissionChecker, ProjectScopeFilter, VisibilityFilter
@@ -34,7 +35,7 @@ from syntara.core.router_discovery import discover_and_register_routers, iter_ap
 # ---------------------------------------------------------------------------
 
 _RBAC_TYPES = (PermissionChecker, ProjectScopeFilter, VisibilityFilter)
-_AUTHN_CALLABLES = (get_current_user, get_token_payload)
+_AUTHN_CALLABLES = (get_current_user, get_token_payload, get_gate_caller)
 
 
 def _has_rbac(route: object) -> bool:

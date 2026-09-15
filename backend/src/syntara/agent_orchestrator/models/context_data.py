@@ -191,6 +191,8 @@ class InvocationContextData(BaseModel):
     execution_id: str | None = None
     callback_url: SecretStr | None = None
     timeout_seconds: int | None = None
+    runtime_service_account_id: str | None = None
+    runtime_engine: Literal["in_process", "sandboxed"] | None = None
     input_data: dict[str, Any] | None = None
     metadata: InvocationMetadata | None = None
 

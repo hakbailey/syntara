@@ -17,6 +17,7 @@ from syntara.authz.models.project import Project
 from syntara.core.database.session import get_db
 from syntara.core.models import User
 from syntara.core.syntara_router import NO_PERMISSION, SyntaraRouter
+from syntara.service_accounts.models.service_account import ServiceAccount, ServiceAccountStatus
 from syntara.workflows.models import ActivitySignalPayload, ExecutionListParams, SignalResponse
 from syntara.workflows.models.activity_execution import ActivityExecutionListResponse
 from syntara.workflows.models.execution import (
@@ -216,6 +217,40 @@ async def create_execution(
         msg = "Not authorized to perform run on execution"
         raise AuthorizationDeniedError(msg)
 
+    runtime_service_account_denied_msg = "Not authorized to use this service account"
+    if request.service_account_id is not None and wf_project_id is not None:
+        service_account = await db.get(ServiceAccount, request.service_account_id)
+        if (
+            service_account is None
+            or service_account.project_id != wf_project_id
+            or service_account.status != ServiceAccountStatus.ACTIVE
+        ):
+            raise AuthorizationDeniedError(runtime_service_account_denied_msg)
+
+        service_account_authz = await authorize(
+            db,
+            evaluator,
+            AuthzRequest(
+                user_id=current_user.id,
+                action="read",
+                resource_type="service_account",
+                resource_id=str(service_account.id),
+                resource_project=resource_project,
+                user_labels=current_user.labels,
+                user_metadata=current_user.authz_metadata,
+            ),
+        )
+        if not service_account_authz.allowed:
+            logger.info(
+                "Authorization denied",
+                user_id=str(current_user.id),
+                resource_type="service_account",
+                action="read",
+                resource_id=str(service_account.id),
+                denied_by=service_account_authz.denied_by,
+            )
+            raise AuthorizationDeniedError(runtime_service_account_denied_msg)
+
     logger.info(
         "Creating execution for workflow",
         workflow_id=request.workflow_id,
@@ -227,6 +262,8 @@ async def create_execution(
         input_data=request.input_data,
         trigger_node_id=request.trigger_node_id,
         use_published=request.use_published,
+        runtime_service_account_id=request.service_account_id,
+        runtime_engine=request.runtime_engine,
     )
     return execution
 

@@ -316,13 +316,19 @@ class TestCreateExecution:
         mock_user.id = uuid4()
         service = ExecutionService(session=mock_session, user=mock_user, temporal_service=mock_temporal)
 
-        await service.create_execution(workflow_id=workflow.id, input_data={}, trigger_node_id="trigger_1")
+        await service.create_execution(
+            workflow_id=workflow.id,
+            input_data={},
+            trigger_node_id="trigger_1",
+            runtime_engine="sandboxed",
+        )
 
         call_kwargs = mock_temporal.start_workflow.call_args.kwargs
         wf_meta = call_kwargs["workflow_metadata"]
         assert wf_meta is not None
         assert wf_meta["workflow_context"]["workflow"]["project_id"] == str(workflow.project_id)
         assert wf_meta["workflow_context"]["execution"]["mode"] == "standard"
+        assert wf_meta["workflow_context"]["execution"]["runtime_engine"] == "sandboxed"
 
     @pytest.mark.asyncio
     async def test_create_execution_success_without_temporal(self) -> None:

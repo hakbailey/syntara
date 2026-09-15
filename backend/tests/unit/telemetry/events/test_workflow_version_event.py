@@ -5,6 +5,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
+from syntara.telemetry.events.base import _get_container_image_version
 from syntara.telemetry.events.workflow_version import WorkflowVersionCreatedEvent
 from tests.unit.telemetry.conftest import VALID_WORKFLOW_ID
 
@@ -75,13 +76,16 @@ class TestWorkflowVersionCreatedEventSegmentConversion:
         segment_event = event.to_segment_event()
         assert segment_event["event"] == "workflow_version_created"
 
-    def test_to_segment_event_contains_all_fields(self) -> None:
+    def test_to_segment_event_contains_all_fields(self, override_settings) -> None:
         event = WorkflowVersionCreatedEvent(
             workflow_id=VALID_WORKFLOW_ID,
             version=5,
             entitlement_id="ent-123",
         )
-        segment_event = event.to_segment_event()
+        _get_container_image_version.cache_clear()
+        with override_settings(container_image_version="img-tag"):
+            segment_event = event.to_segment_event()
+        _get_container_image_version.cache_clear()
         assert segment_event["event"] == "workflow_version_created"
         props = segment_event["properties"]
         assert props == {

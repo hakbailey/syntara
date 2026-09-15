@@ -131,6 +131,20 @@ describe('ServiceAccountSelect', () => {
     expect(onChange).toHaveBeenCalledWith(['sa-1'])
   })
 
+  it('supports selecting one service account without checkboxes', async () => {
+    setupMocks()
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+
+    render(<ServiceAccountSelect selectedIds={[]} onChange={onChange} selectionMode="single" />, { wrapper })
+
+    await user.click(screen.getByText('Select service account'))
+    await user.click(screen.getByText('Jenkins SA'))
+
+    expect(onChange).toHaveBeenCalledWith(['sa-1'])
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+  })
+
   it('shows selected SAs as removable labels', () => {
     setupMocks()
     render(<ServiceAccountSelect selectedIds={['sa-1']} onChange={vi.fn()} />, { wrapper })

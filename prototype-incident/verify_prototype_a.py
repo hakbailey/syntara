@@ -20,7 +20,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
@@ -31,6 +31,7 @@ from api_client import BASE_URL, ApiClient, find_one  # noqa: E402  # type: igno
 from verify import _get_sa_token, _load_secrets  # noqa: E402  # type: ignore[import-untyped]
 
 ROOT = Path(__file__).parents[1]
+RuntimeEngine = Literal["in_process", "sandboxed"]
 SECCOMP_CHECK = ROOT / "backend/containers/agent-sandbox/verify_seccomp.py"
 WEBHOOK_TRACE_POLL_ATTEMPTS = 150
 AUDIT_LOG_POLL_ATTEMPTS = 180
@@ -140,11 +141,14 @@ def _has_triage_tool_trace(activities: dict[str, Any]) -> bool:
 
 def _activity_snapshot(activities: dict[str, Any]) -> str:
     """Summarize activity state without including potentially sensitive output."""
-    return ", ".join(
-        f"{activity.get('activity_name')}:{activity.get('status')}"
-        for activity in _resources(activities)
-        if isinstance(activity, dict)
-    ) or "none"
+    return (
+        ", ".join(
+            f"{activity.get('activity_name')}:{activity.get('status')}"
+            for activity in _resources(activities)
+            if isinstance(activity, dict)
+        )
+        or "none"
+    )
 
 
 def _canonical_structured_content(value: object) -> str:
@@ -531,7 +535,10 @@ def _gate_audit_events_from_logs(invocation_id: str) -> list[dict[str, Any]]:
             structured = ast.literal_eval(structured_text)
         except (SyntaxError, ValueError):
             continue
-        if not isinstance(structured, dict) or structured.get("invocation_id") != invocation_id:
+        if (
+            not isinstance(structured, dict)
+            or structured.get("invocation_id") != invocation_id
+        ):
             continue
         event: dict[str, Any] = {
             "event_action": action_match.group(1),
@@ -561,13 +568,20 @@ def _gate_audit_decisions(invocation_id: str) -> set[str]:
     }
 
 
-def check_standalone_parity(evidence: WebhookEvidence) -> bool:
-    """Run the callback-free copy through the same sandbox runtime and compare output."""
+def _run_standalone_runtime_case(
+    evidence: WebhookEvidence,
+    *,
+    label: str,
+    runtime_engine: RuntimeEngine | None,
+    deployment_engine: RuntimeEngine,
+    expect_sandbox_gate: bool,
+) -> bool:
+    """Run one real callback-free invocation and verify its runtime-specific evidence."""
     with tempfile.TemporaryDirectory(prefix="prototype-a4-") as directory:
         expected_path = Path(directory) / "webhook-result.json"
         expected_path.write_text(json.dumps(evidence.structured_result, default=str))
         environment = os.environ.copy()
-        environment["APP_AGENT_RUNTIME_ENGINE"] = "sandboxed"
+        environment["APP_AGENT_RUNTIME_ENGINE"] = deployment_engine
         environment["APP_AGENT_GATE_BASE_URL"] = f"{BASE_URL}/agent-gate"
         environment["APP_AGENT_ORCHESTRATOR_BASE_URL"] = BASE_URL
         # Tool discovery reads its own base URL setting.  The compose worker
@@ -591,21 +605,27 @@ def check_standalone_parity(evidence: WebhookEvidence) -> bool:
                 ),
             }
         )
-        result = _run(
-            "standalone sandbox parity",
-            [
-                sys.executable,
-                str(ROOT / "prototype-incident/run_standalone.py"),
-                "--invocation-id",
-                evidence.invocation_id,
-                "--compare-to",
-                str(expected_path),
-            ],
-            env=environment,
-        )
+        command = [
+            sys.executable,
+            str(ROOT / "prototype-incident/run_standalone.py"),
+            "--invocation-id",
+            evidence.invocation_id,
+        ]
+        if runtime_engine is None:
+            command.append("--deployment-default")
+        else:
+            command.extend(["--runtime-engine", runtime_engine])
+        command.extend(["--compare-to", str(expected_path)])
+        result = _run(label, command, env=environment)
         print(result.stdout, end="")
         if result.returncode:
             print(result.stderr, file=sys.stderr, end="")
+            return False
+        expected_selection = (
+            "deployment_default" if runtime_engine is None else runtime_engine
+        )
+        if f"runtime_selection={expected_selection}" not in result.stdout:
+            print(f"[FAIL] {label} reported the wrong runtime selection")
             return False
         standalone_invocation_id = next(
             (
@@ -616,25 +636,72 @@ def check_standalone_parity(evidence: WebhookEvidence) -> bool:
             None,
         )
         if not standalone_invocation_id or not _as_uuid(standalone_invocation_id):
-            print("[FAIL] standalone run did not report its cloned invocation ID")
+            print(f"[FAIL] {label} did not report its cloned invocation ID")
             return False
-        standalone_events = _gate_audit_events(
-            standalone_invocation_id,
-            required_actions={"gate_tool_call", "gate_llm_call"},
-        )
-        standalone_gate_ok = any(
-            event.get("event_action") == "gate_tool_call"
-            and isinstance(event.get("structured_data"), dict)
-            and event["structured_data"].get("decision") == "allowed"
+        if expect_sandbox_gate:
+            standalone_events = _gate_audit_events(
+                standalone_invocation_id,
+                required_actions={"gate_tool_call", "gate_llm_call"},
+            )
+            gate_ok = any(
+                event.get("event_action") == "gate_tool_call"
+                and isinstance(event.get("structured_data"), dict)
+                and event["structured_data"].get("decision") == "allowed"
+                for event in standalone_events
+            ) and any(
+                event.get("event_action") == "gate_llm_call"
+                for event in standalone_events
+            )
+            print(
+                f"[{'PASS' if gate_ok else 'FAIL'}] {label} gate audit correlation: "
+                f"invocation_id={standalone_invocation_id}"
+            )
+            return gate_ok
+
+        standalone_events = _gate_audit_events_from_logs(standalone_invocation_id)
+        gate_events = [
+            event
             for event in standalone_events
-        ) and any(
-            event.get("event_action") == "gate_llm_call" for event in standalone_events
-        )
+            if str(event.get("event_action", "")).startswith("gate_")
+        ]
+        no_gate_ok = not gate_events
         print(
-            f"[{'PASS' if standalone_gate_ok else 'FAIL'}] standalone gate audit correlation: "
-            f"invocation_id={standalone_invocation_id}"
+            f"[{'PASS' if no_gate_ok else 'FAIL'}] {label} bypassed sandbox gate: "
+            f"gate_events={len(gate_events)}"
         )
-        return standalone_gate_ok
+        return no_gate_ok
+
+
+def check_standalone_parity(evidence: WebhookEvidence) -> bool:
+    """Exercise explicit runtime overrides and both deployment-default engines."""
+    cases = (
+        {
+            "label": "standalone explicit sandboxed runtime",
+            "runtime_engine": "sandboxed",
+            "deployment_engine": "in_process",
+            "expect_sandbox_gate": True,
+        },
+        {
+            "label": "standalone explicit in-process runtime",
+            "runtime_engine": "in_process",
+            "deployment_engine": "sandboxed",
+            "expect_sandbox_gate": False,
+        },
+        {
+            "label": "standalone sandboxed deployment default",
+            "runtime_engine": None,
+            "deployment_engine": "sandboxed",
+            "expect_sandbox_gate": True,
+        },
+        {
+            "label": "standalone in-process deployment default",
+            "runtime_engine": None,
+            "deployment_engine": "in_process",
+            "expect_sandbox_gate": False,
+        },
+    )
+    results = [_run_standalone_runtime_case(evidence, **case) for case in cases]
+    return all(results)
 
 
 def check_approval_and_remediation(

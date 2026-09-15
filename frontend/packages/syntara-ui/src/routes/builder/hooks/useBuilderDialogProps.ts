@@ -4,6 +4,7 @@ import type { DialogState } from '../../../hooks/useDialogState'
 import { parseTriggerIndex } from '../../../utils/triggerNodeIds'
 import type { BuilderAction } from '../builderReducer'
 import type { RunStepDialogData } from '../components/RunStepDialog'
+import type { RuntimeEngine } from '../components/runtimeEngine'
 import type { PendingImportData } from '../useWorkflowImportExport'
 
 import type { UseBuilderSaveWorkflowParams } from './useBuilderSaveWorkflow'
@@ -16,7 +17,11 @@ export type BuilderDialogPropsParams = {
   selectedTriggerIndex: number
   currentWorkflow: { triggers?: unknown[] } | null
   dispatch: Dispatch<BuilderAction>
-  handleRunWorkflow: (inputData?: Record<string, unknown>, triggerNodeId?: string) => void
+  handleRunWorkflow: (
+    inputData?: Record<string, unknown>,
+    triggerNodeId?: string,
+    runOptions?: { runtimeServiceAccountId?: string; runtimeEngine?: RuntimeEngine }
+  ) => void
   handleDeleteWorkflow: () => void
   runStepDialog: DialogState<RunStepDialogData>
   lastRunStepNodeIdRef: React.MutableRefObject<string | null>
@@ -64,6 +69,7 @@ export function useBuilderDialogProps(params: BuilderDialogPropsParams) {
     deleteDialogOpen,
     dispatch,
     handleRunWorkflow,
+    projectId: selectedProject?.id ?? null,
     handleDeleteWorkflow,
     triggerName: (selectedTrigger as { name?: string } | undefined)?.name ?? 'Trigger',
     triggerNodeId: (selectedTrigger as { id?: string } | undefined)?.id,

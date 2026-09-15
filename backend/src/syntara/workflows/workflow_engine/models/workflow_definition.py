@@ -406,6 +406,10 @@ class AgenticExecutorParameters(TemplateAwareBaseModel, populate_by_name=True):
 
     prompt: str = Field(description="Prompt template for the agent")
     agent: str | None = None
+    runtime_engine: Literal["in_process", "sandboxed"] | None = Field(
+        default=None,
+        description="Optional runtime override; unset uses the workflow or deployment default",
+    )
     llm_model_id: str | None = Field(
         default=None,
         description="UUID of the LLMModel record identifying the provider integration and model.",

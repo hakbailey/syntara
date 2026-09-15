@@ -8,6 +8,24 @@ This covers the API surface for starting, testing, and observing workflow execut
 
 **Two-phase creation**: the Temporal workflow is started *first*; the `Execution` database record is created only after Temporal accepts the run. This prevents orphaned DB records if Temporal rejects the workflow — both systems share a pre-generated UUID so the execution ID stays consistent either way.
 
+## Agent Runtime Selection
+
+Agentic nodes can use the deployment default or an explicit runtime selected at two scopes: a workflow run or an individual agent node. The effective runtime is resolved in this order: node configuration, workflow-run metadata, then `settings.agent_runtime_engine`. The override changes the Agent Orchestrator runtime behind the same Temporal activity; it does not create a second workflow type or dispatch path.
+
+```mermaid
+flowchart LR
+    UI["Workflow run dialogs<br/>or agent node editor"] --> API["ExecutionCreate / workflow definition"]
+    API --> ES["ExecutionService"]
+    ES --> WM["workflow_context.execution"]
+    WM --> DW["OrchestratorWorkflow"]
+    DW --> ACT["execute_agentic_activity()"]
+    ACT --> CTX["InvocationContextData"]
+    CTX --> EX["InvocationExecutor"]
+    EX --> RT["InProcessRuntime or SandboxedRuntime"]
+```
+
+The workflow-list and builder run dialogs expose the workflow-level choice; the AI Agent node editor persists the node-level choice. In-process runs do not need a service account. Sandboxed runs require an active service account and an active service-account credential because `_issue_gate_token()` mints the gate token for that principal. The originating user remains the workflow and execution creator; the selected service account is the runtime actor for sandbox gate authorization and audit events. The authoritative field definitions are `ExecutionCreate` in `backend/src/syntara/schemas/workflows/v2/shared-schemas.yaml` and `AgenticExecutorParameters` in `backend/src/syntara/workflows/workflow_engine/models/workflow_definition.py`.
+
 ## Single-Step / Test Execution
 
 **`POST /workflows/{workflow_id}/test`** — `{target_node_id, trigger_inputs?, pre_resolved_nodes?, execute_target?}` runs one target node with mocked predecessor outputs, so a single node can be tested without running the whole workflow.
@@ -68,6 +86,8 @@ Sortable by `created_at`, `updated_at`, `completed_at`, `status`, `deleted_at`, 
 ## Related Documentation
 
 - [Workflow Engine Architecture](workflow-engine/workflow-engine-overview.md) — three-tier sync, async completion, dispatch
+- [Agentic Node](workflow-engine/agentic-node.md) — runtime propagation and sandbox identity
+- [Service Accounts](service-accounts.md) — service-account requirements for sandboxed agent execution
 - [Expression System](workflow-engine/expression-system.md) — how `${...}` expressions resolve node outputs
 - [Workflow Structure](workflow-management.md) — the node/edge/port graph model being executed
 - [WebSocket Standards](standards/websocket.md) — WebSocket connection patterns

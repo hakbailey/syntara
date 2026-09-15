@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from syntara.telemetry.events.base import _get_container_image_version
 from syntara.telemetry.events.new_user import NewUserEvent
 
 VALID_USER_ID_HASH = hashlib.sha256(str(uuid4()).encode()).hexdigest()
@@ -86,14 +87,17 @@ class TestNewUserEventSegmentConversion:
         segment_event = event.to_segment_event()
         assert segment_event["event"] == "new_user"
 
-    def test_to_segment_event_contains_all_fields(self) -> None:
+    def test_to_segment_event_contains_all_fields(self, override_settings) -> None:
         event = NewUserEvent(
             user_id_hash=VALID_USER_ID_HASH,
             amr=["fed"],
             idp="okta",
             entitlement_id="ent-123",
         )
-        segment_event = event.to_segment_event()
+        _get_container_image_version.cache_clear()
+        with override_settings(container_image_version="img-tag"):
+            segment_event = event.to_segment_event()
+        _get_container_image_version.cache_clear()
         assert segment_event["event"] == "new_user"
         props = segment_event["properties"]
         assert props == {

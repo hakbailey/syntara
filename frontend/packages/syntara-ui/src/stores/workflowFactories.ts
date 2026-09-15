@@ -1,5 +1,6 @@
 import { ActivityTypeEnum, EdgeHandleEnum, type Activity, type NodeSettings } from '@syntara/contracts'
 
+import type { RuntimeEngine } from '../routes/builder/components/runtimeEngine'
 import { PROTOTYPE_POLLUTION_KEYS, safeJSONReviver } from '../utils/jsonSafeParse'
 import { parseJsonEnvironment } from '../utils/parseJsonEnvironment'
 
@@ -123,6 +124,7 @@ export type CreateAgenticActivityOptions = {
   fileIds?: string[]
   credentialId?: string
   responseSchema?: Record<string, unknown>
+  runtimeEngine?: RuntimeEngine
   settings?: NodeSettings
 }
 
@@ -141,6 +143,7 @@ export function createAgenticActivity(options: CreateAgenticActivityOptions): Ac
     fileIds,
     credentialId,
     responseSchema,
+    runtimeEngine,
     settings,
   } = options
   const config: Record<string, unknown> = {}
@@ -160,6 +163,7 @@ export function createAgenticActivity(options: CreateAgenticActivityOptions): Ac
   if (fileIds && fileIds.length > 0) config.file_ids = fileIds
   if (credentialId) config.credential_id = credentialId
   if (responseSchema) config.response_schema = responseSchema
+  if (runtimeEngine) config.runtime_engine = runtimeEngine
 
   return {
     id,

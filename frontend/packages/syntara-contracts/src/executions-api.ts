@@ -489,6 +489,16 @@ export interface components {
        * @default false
        */
       use_published?: boolean
+      /**
+       * Service Account Id
+       * @description Optional service account to use for sandboxed agent steps
+       */
+      service_account_id?: string | null
+      /**
+       * Runtime Engine
+       * @description Optional agent runtime override; unset uses the deployment default
+       */
+      runtime_engine?: ('in_process' | 'sandboxed') | null
     }
     /**
      * TestExecutionCreate
@@ -953,6 +963,11 @@ export interface components {
       prompt: string
       /** Agent */
       agent?: string | null
+      /**
+       * Runtime Engine
+       * @description Optional runtime override; unset uses the workflow or deployment default
+       */
+      runtime_engine?: ('in_process' | 'sandboxed') | null
       /**
        * Llm Model Id
        * @description UUID of the LLMModel record identifying the provider integration and model.

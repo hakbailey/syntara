@@ -304,6 +304,40 @@ describe('useWorkflowActions', () => {
       expect(workflowFetchClient.GET).not.toHaveBeenCalled()
     })
 
+    it('posts the selected service account for sandboxed agent steps', async () => {
+      vi.mocked(executionsFetchClient.POST).mockResolvedValue({
+        data: { id: 'exec-3' },
+        error: undefined,
+      } as never)
+
+      const { result } = renderHook(
+        () =>
+          useWorkflowActions({
+            showSuccess: mockShowSuccess,
+            showError: mockShowError,
+            onNavigate: mockOnNavigate,
+            onRefetch: mockOnRefetch,
+          }),
+        { wrapper: createWrapper() }
+      )
+
+      await result.current.handleRunWorkflow(mockWorkflow(), {}, 'trigger-1', {
+        serviceAccountId: 'sa-1',
+        runtimeEngine: 'sandboxed',
+      })
+
+      expect(executionsFetchClient.POST).toHaveBeenCalledWith('/executions', {
+        body: {
+          workflow_id: 'wf-1',
+          input_data: {},
+          trigger_node_id: 'trigger-1',
+          use_published: true,
+          service_account_id: 'sa-1',
+          runtime_engine: 'sandboxed',
+        },
+      })
+    })
+
     it('resolves the trigger when triggerNodeId is omitted', async () => {
       vi.mocked(workflowFetchClient.GET).mockResolvedValue({
         data: {

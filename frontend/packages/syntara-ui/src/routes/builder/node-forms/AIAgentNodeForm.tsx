@@ -21,6 +21,7 @@ import { detachPromise } from '../../../utils/detachPromise'
 import { useIntegrationPermissions } from '../../configuration/integrations/useIntegrationPermissions'
 import { ExpandableCodeEditor } from '../components/ExpandableCodeEditor'
 import { FileUpload, type UploadedFile } from '../components/file-upload'
+import { RuntimeEngineSelect } from '../components/RuntimeEngineSelect'
 import { NodeEditorAutoSubmitContext, useRegisterAutoSubmit } from '../hooks/useNodeEditorAutoSubmit'
 import { DroppableField } from '../panels/fields/DroppableField'
 import { useIsVersionView } from '../VersionViewContext'
@@ -159,6 +160,37 @@ type AIAgentFormFieldsProps = Readonly<{
   hasNoIntegrations: boolean
 }>
 
+function AgentRuntimeField({
+  control,
+  isVersionView,
+}: Readonly<{
+  control: Control<AIAgentFormData>
+  isVersionView: boolean
+}>) {
+  return (
+    <StackItem>
+      <FormGroup label="Runtime" fieldId="agent-runtime-engine">
+        <Controller
+          control={control}
+          name="runtime_engine"
+          render={({ field }) => (
+            <RuntimeEngineSelect
+              id="agent-runtime-engine"
+              value={field.value}
+              onChange={field.onChange}
+              isDisabled={isVersionView}
+              ariaLabel="Agent runtime"
+            />
+          )}
+        />
+        <HelperText>
+          <HelperTextItem>Choose how this agent runs, or inherit the workflow and deployment defaults.</HelperTextItem>
+        </HelperText>
+      </FormGroup>
+    </StackItem>
+  )
+}
+
 function AIAgentFormFields({
   onHeaderContentChange,
   projectId,
@@ -197,6 +229,7 @@ function AIAgentFormFields({
   const parametersContent = (
     <Stack hasGutter>
       <LLMSection isVersionView={isVersionView} projectId={projectId} />
+      <AgentRuntimeField control={control} isVersionView={isVersionView} />
       <StackItem>
         <FormGroup label="Prompt" labelHelp={nodeHelp.aiPrompt} fieldId="agent-prompt" isRequired>
           <DroppableField

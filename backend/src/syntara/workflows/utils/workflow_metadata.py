@@ -35,6 +35,8 @@ def build_workflow_metadata(
     created_by_user_id: str,
     created_at: str,
     workflow_version_id: UUID,
+    runtime_service_account_id: str | None = None,
+    runtime_engine: str | None = None,
 ) -> dict[str, Any]:
     """Build the ``workflow_metadata`` dict consumed by ``DynamicWorkflow``.
 
@@ -42,6 +44,19 @@ def build_workflow_metadata(
     ``_init_state()`` to populate ``_project_id``, the expression
     resolver's ``workflow_context`` namespace, and audit fields.
     """
+    execution = {
+        "id": execution_id,
+        "mode": execution_mode,
+        "created_by": created_by,
+        "created_by_user_id": created_by_user_id,
+        "created_at": created_at,
+        "workflow_version_id": str(workflow_version_id),
+    }
+    if runtime_service_account_id is not None:
+        execution["runtime_service_account_id"] = runtime_service_account_id
+    if runtime_engine is not None:
+        execution["runtime_engine"] = runtime_engine
+
     return {
         "workflow_context": {
             "workflow": {
@@ -52,14 +67,7 @@ def build_workflow_metadata(
                 "author": workflow_author,
                 "project_id": str(project_id),
             },
-            "execution": {
-                "id": execution_id,
-                "mode": execution_mode,
-                "created_by": created_by,
-                "created_by_user_id": created_by_user_id,
-                "created_at": created_at,
-                "workflow_version_id": str(workflow_version_id),
-            },
+            "execution": execution,
         },
     }
 

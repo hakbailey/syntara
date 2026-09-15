@@ -278,9 +278,9 @@ async def broker_openai_compatible_call(
     body: Annotated[dict[str, Any], Body()],
     caller: Annotated[tuple[User, UUID], Depends(get_gate_caller)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    credential_id: Annotated[str | None, Header(alias="X-Syntara-Credential-ID")] = None,
-    session_id: Annotated[str, Header(alias="X-Syntara-Session-ID")] = "",
-    invocation_id: Annotated[UUID | None, Header(alias="X-Syntara-Invocation-ID")] = None,
+    credential_id: Annotated[str | None, Header(alias="X-Orchestrator-Credential-ID")] = None,
+    session_id: Annotated[str, Header(alias="X-Orchestrator-Session-ID")] = "",
+    invocation_id: Annotated[UUID | None, Header(alias="X-Orchestrator-Invocation-ID")] = None,
 ) -> dict[str, Any] | StreamingResponse:
     """Expose the credential broker as an OpenAI-compatible endpoint."""
     if not credential_id:

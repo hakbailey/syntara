@@ -36,6 +36,22 @@ Loop *control* activities use Temporal IDs `{loop_id}_iter_{n}`, or `{loop_id}_i
 
 This dispatch axis is orthogonal to whether the activity completes synchronously or asynchronously — `agentic` is map-dispatched but uses async completion (see below), while `loop` and `converge` are custom-dispatched but complete synchronously.
 
+### Agent runtime is orthogonal to workflow dispatch
+
+The engine does not choose a different Temporal workflow for sandboxed agents. `OrchestratorWorkflow` always dispatches `agentic` to the same `execute_agentic_activity()`; only the invocation context changes. The API stores a run-level override in `workflow_context.execution`, while `AgenticExecutorParameters.runtime_engine` can override it for one node. The Agent Orchestrator then chooses `InProcessRuntime` or `SandboxedRuntime`, falling back to `settings.agent_runtime_engine` if neither scope specifies a value.
+
+```mermaid
+flowchart LR
+    Run["Workflow run override"] --> Meta["workflow_context.execution"]
+    Node["Agent node override"] --> Resolve["OrchestratorWorkflow"]
+    Meta --> Resolve
+    Resolve --> Activity["execute_agentic_activity()"]
+    Activity --> Invocation["InvocationContextData"]
+    Invocation --> Runtime["Agent runtime factory"]
+```
+
+This separation keeps graph scheduling, async completion, and output mapping independent of the runtime boundary. It also lets a workflow mix agent nodes with different runtime choices without duplicating workflow definitions.
+
 ## Why Async Completion via Signals (Approval, Agentic, Wait)
 
 These three share a pattern because a plain synchronous Temporal activity would tie up a worker slot for as long as the node takes to resolve — potentially hours for a human approval or a long agent run. Instead, the activity does its setup and calls `activity.raise_complete_async()` (`approval_activity.py`, `agentic_activity.py`, `wait_activity.py`), which leaves the Temporal activity in `STARTED` state without holding a worker.
@@ -122,6 +138,7 @@ Shared infrastructure every node type gets for free, no per-node opt-in required
 
 - [Trigger System Overview](triggers/overview.md) — trigger nodes dispatch through this same graph; see there for trigger-specific detail
 - [Agentic Node](agentic-node.md)
+- [Execution Runtime](../execution-runtime.md) — workflow-level runtime selection and execution metadata
 - [Switch Node](switch-node.md)
 - [Wait Node](wait-node.md)
 - [Converge Node](converge-node.md)

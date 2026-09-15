@@ -46,9 +46,9 @@ def _gate_llm(request: HarnessInvocationRequest, token: str, client: httpx.Async
         base_url=base_url,
         stream_usage=True,
         default_headers={
-            "X-Syntara-Credential-ID": request.llm_credential_id,
-            "X-Syntara-Session-ID": request.session_id,
-            "X-Syntara-Invocation-ID": str(request.invocation_id),
+            "X-Orchestrator-Credential-ID": request.llm_credential_id,
+            "X-Orchestrator-Session-ID": request.session_id,
+            "X-Orchestrator-Invocation-ID": str(request.invocation_id),
         },
         http_async_client=client,
     )

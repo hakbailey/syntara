@@ -174,12 +174,16 @@ class OrchestratorWorkflow(WorkflowConvergeMixin, WorkflowApprovalMixin):
 
         self._project_id: str = ""
         self._created_by_user_id: str = ""
+        self._runtime_service_account_id: str | None = None
+        self._runtime_engine: str | None = None
         if workflow_metadata:
             for ns_key, ns_data in workflow_metadata.items():
                 self.resolver.set_namespace(ns_key, ns_data)
             wf_ctx = workflow_metadata.get("workflow_context", {})
             self._project_id = wf_ctx.get("workflow", {}).get("project_id", "")
             self._created_by_user_id = wf_ctx.get("execution", {}).get("created_by_user_id", "")
+            self._runtime_service_account_id = wf_ctx.get("execution", {}).get("runtime_service_account_id")
+            self._runtime_engine = wf_ctx.get("execution", {}).get("runtime_engine")
 
         self.node_inputs: dict[str, dict[str, Any]] = {}
         self.node_control_data: dict[str, dict[str, Any]] = {}
@@ -1515,7 +1519,14 @@ class OrchestratorWorkflow(WorkflowConvergeMixin, WorkflowApprovalMixin):
             if node_type in self._AAP_NODE_TYPES:
                 extra_args = [self.execution_id, self._created_by_user_id]
             elif node_type == NodeType.AGENTIC:
-                extra_args = [self.execution_id, self.request_id, self._project_id, self._created_by_user_id]
+                extra_args = [
+                    self.execution_id,
+                    self.request_id,
+                    self._project_id,
+                    self._created_by_user_id,
+                    self._runtime_service_account_id,
+                    resolved_parameters.get("runtime_engine") or self._runtime_engine,
+                ]
             # Inject the operational timeout BEFORE adding the Temporal margin so
             # activities use the operator-configured deadline, not the Temporal ceiling.
             parameters_with_timeout = {**resolved_parameters, ENGINE_TIMEOUT_SECONDS_KEY: timeout_seconds}

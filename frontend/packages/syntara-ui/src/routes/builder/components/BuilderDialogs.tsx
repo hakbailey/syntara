@@ -1,5 +1,5 @@
-import { Checkbox, Content, Stack, StackItem } from '@patternfly/react-core'
-import { useMemo, useEffect, useRef, useState, type Dispatch } from 'react'
+import { Checkbox, Content, FormGroup, HelperText, HelperTextItem, Stack, StackItem } from '@patternfly/react-core'
+import { useCallback, useMemo, useEffect, useRef, useState, type Dispatch } from 'react'
 
 import { SynConfirmationDialog } from '../../../components/dialogs/SynConfirmationDialog'
 import type { DialogState } from '../../../hooks/useDialogState'
@@ -9,6 +9,7 @@ import { selectActivities, selectTriggers } from '../../../stores/workflowStoreS
 import { WorkflowDeleteDialog } from '../../workflows/WorkflowDeleteDialog'
 import type { BuilderAction } from '../builderReducer'
 import { useBuilderImportHandlers, type UseBuilderImportHandlersParams } from '../hooks/useBuilderImportHandlers'
+import { ServiceAccountSelect } from '../node-forms/ServiceAccountSelect'
 import type { PendingImportData } from '../useWorkflowImportExport'
 import { activitiesReferenceTrigger, hasNonEmptyInputSchema } from '../utils/triggerReferenceCheck'
 import type { ConflictAction, ConflictInfo } from '../VersionConflictDialog'
@@ -17,6 +18,8 @@ import { VersionConflictDialog } from '../VersionConflictDialog'
 import { ImportConfirmationDialog } from './ImportConfirmationDialog'
 import type { RunStepDialogData, RunStepExecutionCreatedOptions } from './RunStepDialog'
 import { RunStepDialog } from './RunStepDialog'
+import type { RuntimeEngine } from './runtimeEngine'
+import { RuntimeEngineSelect } from './RuntimeEngineSelect'
 import { RunWorkflowModal } from './RunWorkflowModal'
 
 const RUN_CONFIRM_DISMISSED_KEY = 'syntara-run-workflow-confirm-dismissed'
@@ -43,7 +46,12 @@ type BuilderDialogsProps = Readonly<{
   confirmDialogOpen: boolean
   deleteDialogOpen: boolean
   dispatch: Dispatch<BuilderAction>
-  handleRunWorkflow: (inputData?: Record<string, unknown>, triggerNodeId?: string) => void
+  handleRunWorkflow: (
+    inputData?: Record<string, unknown>,
+    triggerNodeId?: string,
+    runOptions?: { runtimeServiceAccountId?: string; runtimeEngine?: RuntimeEngine }
+  ) => void
+  projectId?: string | null
   handleDeleteWorkflow: () => void
   triggerName: string
   triggerNodeId?: string
@@ -74,7 +82,11 @@ type UseRunConfirmStateParams = {
   confirmDialogOpen: boolean
   showInputDialog: boolean
   dispatch: Dispatch<BuilderAction>
-  handleRunWorkflow: (inputData?: Record<string, unknown>, triggerNodeId?: string) => void
+  handleRunWorkflow: (
+    inputData?: Record<string, unknown>,
+    triggerNodeId?: string,
+    runOptions?: { runtimeServiceAccountId?: string; runtimeEngine?: RuntimeEngine }
+  ) => void
   triggerNodeId?: string
 }
 
@@ -87,6 +99,8 @@ function useRunConfirmState({
 }: UseRunConfirmStateParams) {
   const [confirmedRun, setConfirmedRun] = useState(false)
   const [doNotShowAgain, setDoNotShowAgain] = useState(false)
+  const [runtimeServiceAccountId, setRuntimeServiceAccountId] = useState<string | null>(null)
+  const [runtimeEngine, setRuntimeEngine] = useState<RuntimeEngine | undefined>()
   const [prevOpen, setPrevOpen] = useState(confirmDialogOpen)
 
   // getDerivedStateFromProps pattern — reset state on open/close transitions
@@ -94,24 +108,37 @@ function useRunConfirmState({
     setPrevOpen(true)
     setConfirmedRun(false)
     setDoNotShowAgain(false)
+    setRuntimeServiceAccountId(null)
+    setRuntimeEngine(undefined)
   } else if (!confirmDialogOpen && prevOpen) {
     setPrevOpen(false)
   }
 
   const skipConfirm = confirmDialogOpen && getRunConfirmDismissed()
 
+  const runWorkflow = useCallback(
+    (inputData?: Record<string, unknown>, selectedTriggerNodeId?: string) => {
+      const runOptions = {
+        ...(runtimeServiceAccountId ? { runtimeServiceAccountId } : {}),
+        ...(runtimeEngine ? { runtimeEngine } : {}),
+      }
+      handleRunWorkflow(inputData, selectedTriggerNodeId, Object.keys(runOptions).length > 0 ? runOptions : undefined)
+    },
+    [handleRunWorkflow, runtimeEngine, runtimeServiceAccountId]
+  )
+
   // Auto-run when confirmation is skipped and no input dialog is needed
   const autoRanRef = useRef(false)
   useEffect(() => {
     if (skipConfirm && !showInputDialog && confirmDialogOpen && !autoRanRef.current) {
       autoRanRef.current = true
-      handleRunWorkflow(undefined, triggerNodeId)
+      runWorkflow(undefined, triggerNodeId)
       dispatch({ type: 'SET_CONFIRM_DIALOG', payload: false })
     }
     if (!confirmDialogOpen) {
       autoRanRef.current = false
     }
-  }, [skipConfirm, showInputDialog, confirmDialogOpen, handleRunWorkflow, dispatch, triggerNodeId])
+  }, [skipConfirm, showInputDialog, confirmDialogOpen, runWorkflow, dispatch, triggerNodeId])
 
   return {
     showConfirmStep: confirmDialogOpen && !skipConfirm && !confirmedRun,
@@ -122,16 +149,23 @@ function useRunConfirmState({
       dispatch({ type: 'SET_CONFIRM_DIALOG', payload: false })
       setConfirmedRun(false)
       setDoNotShowAgain(false)
+      setRuntimeServiceAccountId(null)
+      setRuntimeEngine(undefined)
     },
     handleConfirmRun: () => {
       if (doNotShowAgain) setRunConfirmDismissed()
       if (showInputDialog) {
         setConfirmedRun(true)
       } else {
-        handleRunWorkflow(undefined, triggerNodeId)
+        runWorkflow(undefined, triggerNodeId)
         dispatch({ type: 'SET_CONFIRM_DIALOG', payload: false })
       }
     },
+    runWorkflow,
+    runtimeServiceAccountId,
+    setRuntimeServiceAccountId,
+    runtimeEngine,
+    setRuntimeEngine,
   }
 }
 
@@ -142,6 +176,7 @@ export function BuilderDialogs({
   deleteDialogOpen,
   dispatch,
   handleRunWorkflow,
+  projectId,
   handleDeleteWorkflow,
   triggerName,
   triggerNodeId,
@@ -168,8 +203,19 @@ export function BuilderDialogs({
   const triggerNodeIds = useMemo(() => (triggers ?? []).map((t) => t.id).filter(Boolean), [triggers])
   const showInputDialog =
     hasNonEmptyInputSchema(triggerInputSchema) || activitiesReferenceTrigger(activities ?? [], triggerNodeIds)
-  const { showConfirmStep, showInputStep, doNotShowAgain, setDoNotShowAgain, closeAll, handleConfirmRun } =
-    useRunConfirmState({ confirmDialogOpen, showInputDialog, dispatch, handleRunWorkflow, triggerNodeId })
+  const {
+    showConfirmStep,
+    showInputStep,
+    doNotShowAgain,
+    setDoNotShowAgain,
+    closeAll,
+    handleConfirmRun,
+    runtimeServiceAccountId,
+    setRuntimeServiceAccountId,
+    runtimeEngine,
+    setRuntimeEngine,
+    runWorkflow,
+  } = useRunConfirmState({ confirmDialogOpen, showInputDialog, dispatch, handleRunWorkflow, triggerNodeId })
   return (
     <>
       <SynConfirmationDialog
@@ -190,6 +236,41 @@ export function BuilderDialogs({
             </Content>
           </StackItem>
           <StackItem>
+            <FormGroup label="Agent runtime" fieldId="builder-runtime-engine">
+              <RuntimeEngineSelect
+                id="builder-runtime-engine"
+                value={runtimeEngine}
+                onChange={(value) => {
+                  setRuntimeEngine(value)
+                  if (value === 'in_process') setRuntimeServiceAccountId(null)
+                }}
+                isDisabled={!confirmDialogOpen}
+                ariaLabel="Agent runtime"
+              />
+              <HelperText>
+                <HelperTextItem>Overrides the deployment default for agent steps in this workflow run.</HelperTextItem>
+              </HelperText>
+            </FormGroup>
+          </StackItem>
+          <StackItem>
+            <FormGroup label="Run as service account (optional)" fieldId="builder-runtime-service-account">
+              <ServiceAccountSelect
+                id="builder-runtime-service-account"
+                selectedIds={runtimeServiceAccountId ? [runtimeServiceAccountId] : []}
+                onChange={(ids) => setRuntimeServiceAccountId(ids[0] ?? null)}
+                projectId={projectId}
+                selectionMode="single"
+                enabled={confirmDialogOpen && runtimeEngine !== 'in_process' && Boolean(projectId)}
+                allowCreate={false}
+              />
+              <HelperText>
+                <HelperTextItem>
+                  Required for sandboxed agent steps; the human requester remains the audit owner.
+                </HelperTextItem>
+              </HelperText>
+            </FormGroup>
+          </StackItem>
+          <StackItem>
             <Checkbox
               id="run-workflow-do-not-show-again"
               label="Don't show again for all manual workflow runs"
@@ -203,7 +284,7 @@ export function BuilderDialogs({
         key={showInputStep ? `open-${triggerNodeId ?? ''}` : 'closed'}
         isOpen={showInputStep}
         onClose={closeAll}
-        onConfirm={handleRunWorkflow}
+        onConfirm={runWorkflow}
         workflowName={workflowName}
         triggerName={triggerName}
         triggerNodeId={triggerNodeId}

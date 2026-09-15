@@ -1691,6 +1691,11 @@ export interface components {
       /** Agent */
       agent?: string | null
       /**
+       * Runtime Engine
+       * @description Optional runtime override; unset uses the workflow or deployment default
+       */
+      runtime_engine?: ('in_process' | 'sandboxed') | null
+      /**
        * Llm Model Id
        * @description UUID of the LLMModel record identifying the provider integration and model.
        */

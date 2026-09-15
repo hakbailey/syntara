@@ -671,6 +671,7 @@ class OrchestrationService:
             name="cancellation_watcher",
         )
         try:
+
             async def on_event(event_dict: dict[str, Any]) -> None:
                 if cancel_event.is_set():
                     raise InvocationCancelledError(str(invocation_id), phase="streaming")  # noqa: TRY301

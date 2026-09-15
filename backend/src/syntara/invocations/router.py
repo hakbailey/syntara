@@ -43,7 +43,7 @@ router = SyntaraRouter(prefix="/invocations", tags=["Invocation"])
 
 logger = structlog.stdlib.get_logger(__name__)
 
-_INTERNAL_ONLY_CONTEXT_KEYS = frozenset({"callback_url"})
+_INTERNAL_ONLY_CONTEXT_KEYS = frozenset({"callback_url", "runtime_service_account_id", "runtime_engine"})
 
 
 def _sanitize_context_data(context_data: dict[str, object], request: Request) -> dict[str, object]:

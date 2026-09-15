@@ -565,7 +565,7 @@ export function BuilderContent(props: BuilderContentProps) {
     lastRunStepNodeIdRef,
     pendingImport,
     setPendingImport,
-    selectedProject: stableProjectId ? { id: stableProjectId } : null,
+    selectedProject: builderProjectId ? { id: builderProjectId } : null,
     createWorkflow: createWorkflow as UseBuilderSaveWorkflowParams['createWorkflow'],
     setLocation,
     pinnedMockDataForDialog,

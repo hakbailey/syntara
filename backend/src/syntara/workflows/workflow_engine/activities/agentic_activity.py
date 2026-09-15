@@ -127,6 +127,8 @@ async def execute_agentic_activity(
     request_id: str | None = None,
     project_id: str = "",
     created_by_user_id: str = "",
+    runtime_service_account_id: str | None = None,
+    runtime_engine: str | None = None,
 ) -> dict[str, Any]:
     """V2 agentic activity with async completion.
 
@@ -141,6 +143,8 @@ async def execute_agentic_activity(
         request_id: Optional X-Request-Id (UUID) from the originating HTTP request
         project_id: Project ID to associate the invocation with (required)
         created_by_user_id: UUID of the user who started the workflow (for created_by attribution)
+        runtime_service_account_id: Optional service account used by sandboxed agent steps
+        runtime_engine: Optional runtime override for this agent step
 
     """
     logger.info("Starting agentic activity (v2)")
@@ -210,6 +214,8 @@ async def execute_agentic_activity(
                 metadata=agent_metadata,
                 project_id=project_id,
                 timeout_seconds=input_config.get("timeout"),
+                runtime_service_account_id=runtime_service_account_id,
+                runtime_engine=runtime_engine,
             )
 
             logger.info(

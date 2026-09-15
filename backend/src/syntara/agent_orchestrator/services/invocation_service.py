@@ -44,11 +44,13 @@ from syntara.core.constants import CONTEXT_KEY_FILE_IDS
 from syntara.core.database.session import get_db
 from syntara.core.exceptions import SafeValueError
 from syntara.core.models import User
+from syntara.core.models.principal import PrincipalType
 from syntara.core.services import BaseService
 from syntara.files.file_manager import FileManager, get_file_manager
 from syntara.files.models import FileMetadata
 from syntara.invocations.audit.invocation_cancelled import InvocationCancellationResult, InvocationCancelledEvent
 from syntara.invocations.audit.invocation_created import InvocationCreatedEvent
+from syntara.service_accounts.models.service_account import ServiceAccount
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -121,6 +123,8 @@ class InvocationService(BaseService):
         self,
         invocation_id: UUID,
         file_ids: list[str] | None = None,
+        project_id: UUID | None = None,
+        runtime_service_account_id: str | None = None,
     ) -> None:
         """Start built-in workflows for this invocation.
 
@@ -131,6 +135,8 @@ class InvocationService(BaseService):
         Args:
             invocation_id: Invocation ID to execute
             file_ids: Optional file UUIDs to convert
+            project_id: Project associated with the invocation
+            runtime_service_account_id: Optional service account for sandboxed execution
 
         """
         if not self.execution_service:
@@ -155,13 +161,36 @@ class InvocationService(BaseService):
                     logger.warning("Builtin workflow 'Document Conversion' not found, skipping")
 
         try:
+            actor_id = str(self.user.id)
+            actor_username = self.user.username
+            actor_type = self.user.__principal_type__.value
+            if runtime_service_account_id:
+                try:
+                    runtime_service_account_uuid = UUID(runtime_service_account_id)
+                except ValueError:
+                    runtime_service_account_uuid = None
+                if runtime_service_account_uuid is not None:
+                    actor_id = str(runtime_service_account_uuid)
+                    service_account = await self.session.get(ServiceAccount, runtime_service_account_uuid)
+                else:
+                    service_account = None
+                if service_account is not None and (project_id is None or service_account.project_id == project_id):
+                    actor_username = service_account.name
+                else:
+                    logger.warning(
+                        "Runtime service account is unavailable for invocation",
+                        invocation_id=invocation_id,
+                        service_account_id=runtime_service_account_id,
+                    )
+                actor_type = PrincipalType.SERVICE_ACCOUNT.value
+
             await self.execution_service.create_execution_by_name(
                 workflow_name=BUILTIN_WORKFLOW_AGENT_EXECUTION,
                 input_data={
                     "invocation_id": str(invocation_id),
-                    "actor_id": str(self.user.id),
-                    "actor_username": self.user.username,
-                    "actor_type": self.user.__principal_type__.value,
+                    "actor_id": actor_id,
+                    "actor_username": actor_username,
+                    "actor_type": actor_type,
                 },
                 project_name=BUILTIN_PROJECT_NAME,
             )
@@ -304,7 +333,12 @@ class InvocationService(BaseService):
             raise
 
         # Start builtin workflows AFTER successful commit
-        await self._start_builtin_workflows(invocation_id, file_ids=new_file_ids or None)
+        await self._start_builtin_workflows(
+            invocation_id,
+            file_ids=new_file_ids or None,
+            project_id=project_id,
+            runtime_service_account_id=ctx.runtime_service_account_id,
+        )
 
         return invocation
 

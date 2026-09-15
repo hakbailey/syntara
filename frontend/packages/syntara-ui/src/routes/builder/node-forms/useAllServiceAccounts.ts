@@ -16,7 +16,7 @@ async function fetchAllServiceAccounts(projectId?: string | null): Promise<Servi
   )
 }
 
-export function useAllServiceAccounts(projectId?: string | null) {
+export function useAllServiceAccounts(projectId?: string | null, enabled = true) {
   const {
     data: serviceAccounts = [],
     isPending,
@@ -24,6 +24,7 @@ export function useAllServiceAccounts(projectId?: string | null) {
   } = useQuery({
     queryKey: ['all-service-accounts', projectId],
     queryFn: () => fetchAllServiceAccounts(projectId),
+    enabled,
   })
   return { serviceAccounts, isLoading: isPending, refetch }
 }

@@ -6,7 +6,7 @@ HTTP/API concerns in the FastAPI endpoints.
 
 from collections.abc import Iterable
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4
 
 import jsonschema
@@ -287,6 +287,8 @@ class ExecutionService(BaseService):
         trigger_node_id: str,
         *,
         use_published: bool = False,
+        runtime_service_account_id: UUID | None = None,
+        runtime_engine: Literal["in_process", "sandboxed"] | None = None,
     ) -> ExecutionRead:
         """Create and start a new workflow execution.
 
@@ -301,6 +303,8 @@ class ExecutionService(BaseService):
             input_data: Input parameters for the workflow
             trigger_node_id: Trigger node ID to start from
             use_published: If True, use the published version instead of current version
+            runtime_service_account_id: Optional service account for sandboxed agent steps
+            runtime_engine: Optional agent runtime override; unset uses the deployment default
 
         Returns:
             Created execution with status=PENDING
@@ -359,6 +363,8 @@ class ExecutionService(BaseService):
             trigger_node_id=trigger_node_id,
             recorder=recorder,
             component=component,
+            runtime_service_account_id=runtime_service_account_id,
+            runtime_engine=runtime_engine,
         )
 
     async def _start_temporal_and_create_execution(
@@ -371,6 +377,8 @@ class ExecutionService(BaseService):
         recorder: "MetricsRecorder",
         component: ComponentLabel,
         retried_from_execution_id: UUID | None = None,
+        runtime_service_account_id: UUID | None = None,
+        runtime_engine: Literal["in_process", "sandboxed"] | None = None,
     ) -> ExecutionRead:
         """Start a Temporal workflow and persist the execution record.
 
@@ -409,6 +417,10 @@ class ExecutionService(BaseService):
             created_by_user_id=str(self.user.id),
             created_at=now.isoformat(),
             workflow_version_id=workflow_version.id,
+            runtime_engine=runtime_engine,
+            runtime_service_account_id=(
+                str(runtime_service_account_id) if runtime_service_account_id is not None else None
+            ),
         )
 
         # Start Temporal workflow FIRST (if temporal_service is available)
@@ -450,6 +462,14 @@ class ExecutionService(BaseService):
 
         # Create execution record in database ONLY after Temporal accepts workflow
         _, trigger_node = resolve_trigger_node(workflow_version.workflow_definition, trigger_node_id)
+        execution_metadata: dict[str, Any] | None = None
+        if runtime_service_account_id is not None or runtime_engine is not None:
+            execution_metadata = {}
+            if runtime_service_account_id is not None:
+                execution_metadata["runtime_service_account_id"] = str(runtime_service_account_id)
+            if runtime_engine is not None:
+                execution_metadata["runtime_engine"] = runtime_engine
+
         execution = Execution(
             id=execution_id,
             workflow_id=workflow.id,
@@ -462,6 +482,7 @@ class ExecutionService(BaseService):
             retried_from_execution_id=retried_from_execution_id,
             trigger_type=trigger_node.get("type"),
             interface=interface_context_var.get(),
+            execution_metadata=execution_metadata,
             created_by=self.user.id,
             updated_by=self.user.id,
         )
@@ -1209,6 +1230,12 @@ class ExecutionService(BaseService):
 
         recorder = get_metrics_recorder()
         component = ComponentLabel.EXECUTION_SERVICE
+        execution_metadata = original.execution_metadata if isinstance(original.execution_metadata, dict) else {}
+        runtime_service_account_value = execution_metadata.get("runtime_service_account_id")
+        original_runtime_engine = execution_metadata.get("runtime_engine")
+        runtime_engine: Literal["in_process", "sandboxed"] | None = (
+            original_runtime_engine if original_runtime_engine in ("in_process", "sandboxed") else None
+        )
 
         return await self._start_temporal_and_create_execution(
             workflow=original.workflow,
@@ -1218,4 +1245,8 @@ class ExecutionService(BaseService):
             recorder=recorder,
             component=component,
             retried_from_execution_id=original.id,
+            runtime_service_account_id=(
+                UUID(str(runtime_service_account_value)) if runtime_service_account_value else None
+            ),
+            runtime_engine=runtime_engine,
         )

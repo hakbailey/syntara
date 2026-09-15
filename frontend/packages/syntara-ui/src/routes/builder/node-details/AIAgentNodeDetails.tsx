@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 
 import { useAlerts } from '../../../providers/alerts'
 import { createAgenticActivity, useWorkflowStoreActions } from '../../../stores/useWorkflowStore'
+import type { RuntimeEngine } from '../components/runtimeEngine'
 import { AIAgentNodeForm } from '../node-forms/AIAgentNodeForm'
 import type { AIAgentFormInitialData, AIAgentFormSubmitData } from '../node-forms/AIAgentNodeForm'
 
@@ -41,6 +42,7 @@ export function AIAgentNodeDetails({
     credential_id?: string
     response_schema?: Record<string, unknown>
     responseSchema?: Record<string, unknown>
+    runtime_engine?: RuntimeEngine
   }
   // In v2, parameters are at activity.parameters directly (not task.parameters).
   // Some data shapes use a top-level config field for MCP tool config.
@@ -61,6 +63,7 @@ export function AIAgentNodeDetails({
     integration_connections: integrationConnections,
     credential_id: agentConfig.credential_id ?? undefined,
     responseSchema: responseSchema ? JSON.stringify(responseSchema, null, 2) : undefined,
+    runtime_engine: agentConfig.runtime_engine,
     settings: taskData.settings,
   }
 
@@ -82,6 +85,7 @@ export function AIAgentNodeDetails({
         fileIds: data.fileIds.length > 0 ? data.fileIds : undefined,
         credentialId: data.credential_id ?? undefined,
         responseSchema: data.parsedResponseSchema,
+        runtimeEngine: data.runtime_engine,
         settings: data.settings,
       })
 

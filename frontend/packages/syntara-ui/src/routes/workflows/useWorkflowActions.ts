@@ -4,6 +4,7 @@ import { useCallback } from 'react'
 import { executionsFetchClient, workflowClient } from '../../client'
 import type { useAlerts } from '../../providers/alerts'
 import { getErrorMessage } from '../../utils/apiErrors'
+import type { RuntimeEngine } from '../builder/components/runtimeEngine'
 
 import { resolveWorkflowRunTrigger } from './resolveWorkflowRunTrigger'
 
@@ -39,7 +40,12 @@ export function useWorkflowActions({
   const { mutate: unpublishWorkflow } = workflowClient.useMutation('post', '/workflows/{workflow_id}/unpublish')
 
   const handleRunWorkflow = useCallback(
-    async (workflow: Workflow, inputData: Record<string, unknown> = {}, triggerNodeId?: string) => {
+    async (
+      workflow: Workflow,
+      inputData: Record<string, unknown> = {},
+      triggerNodeId?: string,
+      runOptions?: { serviceAccountId?: string; runtimeEngine?: RuntimeEngine }
+    ) => {
       if (!workflow.id) return
 
       let resolvedTriggerNodeId = triggerNodeId
@@ -58,6 +64,8 @@ export function useWorkflowActions({
           input_data: inputData,
           trigger_node_id: resolvedTriggerNodeId,
           use_published: true,
+          ...(runOptions?.serviceAccountId ? { service_account_id: runOptions.serviceAccountId } : {}),
+          ...(runOptions?.runtimeEngine ? { runtime_engine: runOptions.runtimeEngine } : {}),
         },
       })
       if (error || !data?.id) {

@@ -99,6 +99,9 @@ class TestFieldPassthrough:
     def test_execution_mode(self, mode: str) -> None:
         assert _build(execution_mode=mode)["workflow_context"]["execution"]["mode"] == mode
 
+    def test_runtime_engine(self) -> None:
+        assert _build(runtime_engine="sandboxed")["workflow_context"]["execution"]["runtime_engine"] == "sandboxed"
+
 
 class TestDynamicWorkflowCompat:
     """Output is compatible with DynamicWorkflow._initialize_state unpacking.

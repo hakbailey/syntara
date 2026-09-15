@@ -6,7 +6,7 @@ SQLModel Pattern 1 (separate models with table=False for API operations).
 
 from datetime import datetime
 from enum import Enum, StrEnum
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from uuid import UUID
 
 from pydantic import ConfigDict, field_validator, model_validator
@@ -329,6 +329,14 @@ class ExecutionCreate(SQLModel):
     trigger_node_id: str = Field(description="Trigger node ID to start from")
     use_published: bool = Field(
         default=False, description="If true, run the published version instead of the current version"
+    )
+    service_account_id: UUID | None = Field(
+        default=None,
+        description="Optional service account to use for sandboxed agent steps",
+    )
+    runtime_engine: Literal["in_process", "sandboxed"] | None = Field(
+        default=None,
+        description="Optional agent runtime override; unset uses the deployment default",
     )
 
 

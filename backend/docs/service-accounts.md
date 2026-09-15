@@ -389,6 +389,12 @@ Service accounts can receive role assignments via the standard role assignment A
 
 The role assignment service (`src/syntara/authz/services/role_assignment_service.py`) handles the `"service_account"` principal type: it validates the SA exists, resolves its name for display, and outer-joins the `ServiceAccount` table in queries.
 
+## Sandboxed Agent Execution
+
+Service accounts also serve as runtime principals for sandboxed agentic nodes; this is separate from service-account authentication for webhook and EDA triggers. When a workflow run selects the sandboxed runtime, the selected service-account ID is carried through internal execution metadata and invocation context. The Agent Orchestrator uses it to resolve actor context and mint a short-lived gate token from an active service-account credential.
+
+If the service account is missing or disabled, or its credential is expired, disabled, or absent, sandbox initialization fails before the agent loop starts. In-process agent execution bypasses the sandbox gate and does not require a service account. The workflow and execution creator remains the originating user, while the selected service account is the runtime actor used for sandbox authorization and related audit context. See [Agentic Node — Runtime Selection and Identity](workflow-engine/agentic-node.md#runtime-selection-and-identity) for the end-to-end propagation path.
+
 ## Webhook and EDA Integration
 
 Service accounts are the required authentication mechanism for webhook and EDA trigger endpoints. External systems (GitHub, Jira, Slack, EDA, etc.) must present a valid service account Bearer token to invoke a trigger.
@@ -594,3 +600,9 @@ The API usage accumulator (`src/syntara/telemetry/api_usage_accumulator.py`) tra
 | `src/syntara/workflows/exceptions.py` | WebhookAuthenticationRequiredError, WebhookServiceAccountNotAuthorizedError |
 | `src/syntara/telemetry/api_usage_accumulator.py` | API usage tracking by principal_type |
 | `src/syntara/core/config/base.py` | `jwt_sa_access_token_lifetime_minutes`, `sa_credential_max_lifetime_days` settings |
+
+## Related Documentation
+
+- [Agentic Node](workflow-engine/agentic-node.md) — sandbox runtime selection and identity propagation
+- [Execution Lifecycle](workflow-engine/execution-lifecycle.md) — retry preservation of runtime metadata
+- [Authentication](authentication.md) — service-account token issuance and validation

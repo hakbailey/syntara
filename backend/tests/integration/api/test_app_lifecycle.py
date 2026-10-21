@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from syntara.api.main import app
 from syntara.audit.dispatcher import AuditEventDispatcher
 from syntara.audit.outbox import session as outbox_session
 from syntara.audit.outbox import worker as outbox_worker
@@ -87,3 +88,41 @@ async def test_lifespan_context_redirects_outbox_worker_factories(test_db_engine
         assert session_ns.AuditWorkerAsyncSessionLocal is not AuditWorkerAsyncSessionLocal, (
             "enter_test_lifespan must patch syntara.audit.outbox.session.AuditWorkerAsyncSessionLocal"
         )
+
+
+@pytest.mark.asyncio
+async def test_lifespan_restores_prior_authz_evaluator_state(test_db_engine: AsyncEngine) -> None:
+    """Lifespan entry must leave app.state.authz_evaluator as it found it.
+
+    The lifespan sets app.state.authz_evaluator at startup and stops the evaluator at
+    shutdown but does not clear the attribute, so a lifespan-entering test leaves its
+    mock behind for every later test in the same pytest-xdist worker.
+
+    The test itself must honor the same contract: production code reads this attribute
+    directly at request time, so if a session-scoped session_app has a live evaluator
+    bound here, the sentinel/delete phases must not leave it missing for later tests.
+    """
+    had_original = hasattr(app.state, "authz_evaluator")
+    original = getattr(app.state, "authz_evaluator", None)
+    try:
+        sentinel = object()
+        app.state.authz_evaluator = sentinel
+        async with enter_test_lifespan(test_db_engine):
+            assert app.state.authz_evaluator is not sentinel
+        assert app.state.authz_evaluator is sentinel, (
+            "app.state.authz_evaluator was not restored after lifespan shutdown; "
+            "the lifespan test's mock evaluator leaks to later tests in this worker"
+        )
+
+        del app.state.authz_evaluator
+        async with enter_test_lifespan(test_db_engine):
+            assert hasattr(app.state, "authz_evaluator")
+        assert not hasattr(app.state, "authz_evaluator"), (
+            "app.state.authz_evaluator was absent before lifespan entry but present after "
+            "shutdown; the lifespan test's mock evaluator leaks to later tests in this worker"
+        )
+    finally:
+        if had_original:
+            app.state.authz_evaluator = original
+        elif hasattr(app.state, "authz_evaluator"):
+            delattr(app.state, "authz_evaluator")

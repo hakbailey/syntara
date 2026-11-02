@@ -43,7 +43,7 @@ from tests.integration.helpers.router_modules import ROUTER_MODULES
 # collection time, before any fixture or monkeypatch can run. The app registers routers
 # during lifespan startup, not at import, so whichever test first enters the lifespan in
 # a pytest-xdist worker would otherwise decide which monkeypatch is live when these
-# modules are first imported. ROUTER_MODULES is the single
+# modules are first imported (AAP-98594 work item 1). ROUTER_MODULES is the single
 # source of truth for the list; the router binding regression test guards that it
 # stays exhaustive.
 # A failure here is a collection error on purpose, unlike discover_routers' per-module
@@ -211,7 +211,14 @@ async def _seed_authenticated_group(test_db_session: AsyncSession) -> None:
     result = await test_db_session.exec(select(Group).where(Group.name == AUTHENTICATED_GROUP_NAME))
     if not result.first():
         test_db_session.add(Group(id=uuid4(), name=AUTHENTICATED_GROUP_NAME, is_builtin=True, labels={}))
-        await test_db_session.flush()
+    # Commit unconditionally, not just flush-on-insert: an open transaction holds a lock
+    # on groups for the rest of the test (RowExclusiveLock after an insert, AccessShareLock
+    # after only the SELECT), and run_seeders' DROP TRIGGER needs an AccessExclusiveLock
+    # on the same table, so any lifespan-entering test in a directory without a committing
+    # fixture would deadlock. Integration tests isolate per test
+    # by restoring the template database, not by rolling this session back, so the commit
+    # is consistent with the suite's design.
+    await test_db_session.commit()
 
 
 @pytest_asyncio.fixture

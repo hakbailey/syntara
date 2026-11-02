@@ -25,6 +25,7 @@ from syntara.authz.models import Project, RoleAssignment
 from syntara.authz.seed import seed_authz_data
 from syntara.core.models import User
 from syntara.core.models.group import Group, user_groups
+from tests.integration.helpers.router_modules import ROUTER_MODULES
 
 # Name for the test group that grants the 'user' role
 _TEST_GROUP_NAME = "test-users"
@@ -223,14 +224,14 @@ def _mock_evaluator(monkeypatch: pytest.MonkeyPatch) -> None:
     def _mock_getter(request: Any = None) -> AsyncMock:  # noqa: ANN401
         return mock_evaluator
 
-    monkeypatch.setattr("syntara.authz.dependencies.get_authz_evaluator", _mock_getter)
-    monkeypatch.setattr("syntara.authz.dependencies.get_authz_evaluator", _mock_getter)
-    monkeypatch.setattr("syntara.authz.router.get_authz_evaluator", _mock_getter)
-    monkeypatch.setattr("syntara.authz.role_assignment_router.get_authz_evaluator", _mock_getter)
-    monkeypatch.setattr("syntara.workflows.executions_router.get_authz_evaluator", _mock_getter)
+    # Patch the definition module plus every router module that binds
+    # get_authz_evaluator, derived from the same source of truth the
+    # collection-time import loop uses, so a newly added router cannot be
+    # missed here.
+    for target in ("syntara.authz.dependencies", *ROUTER_MODULES):
+        monkeypatch.setattr(f"{target}.get_authz_evaluator", _mock_getter)
 
     # Also override via FastAPI dependency_overrides so Depends(...) resolves correctly.
-    app.dependency_overrides[get_authz_evaluator] = lambda: mock_evaluator
     app.dependency_overrides[get_authz_evaluator] = lambda: mock_evaluator
 
 

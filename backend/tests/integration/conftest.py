@@ -11,6 +11,7 @@ across multiple database connections (e.g. API clients, concurrent sessions).
 
 import asyncio
 import contextlib
+import importlib
 import sys
 from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
@@ -36,6 +37,21 @@ from syntara.authz.models.project import Project
 from syntara.authz.resolver import AUTHENTICATED_GROUP_NAME
 from syntara.core.models.group import Group
 from syntara.core.websocket.router import build_websocket_router
+from tests.integration.helpers.router_modules import ROUTER_MODULES
+
+# Import every router module that binds get_authz_evaluator in Depends(...) now, at
+# collection time, before any fixture or monkeypatch can run. The app registers routers
+# during lifespan startup, not at import, so whichever test first enters the lifespan in
+# a pytest-xdist worker would otherwise decide which monkeypatch is live when these
+# modules are first imported. ROUTER_MODULES is the single
+# source of truth for the list; the router binding regression test guards that it
+# stays exhaustive.
+# A failure here is a collection error on purpose, unlike discover_routers' per-module
+# degradation: skipping a module would let the first lifespan entry import it under a
+# live patch, which is the poisoning this loop prevents, and every listed module is
+# expected to import.
+for _router_module in ROUTER_MODULES:
+    importlib.import_module(_router_module)
 
 pytest_plugins = [
     "tests.integration.fixtures.database",
@@ -245,9 +261,12 @@ def _mock_evaluator_allow_all(monkeypatch: pytest.MonkeyPatch) -> None:
     def _mock_getter(request: Any = None) -> AsyncMock:  # noqa: ANN401
         return mock_evaluator
 
-    monkeypatch.setattr("syntara.authz.dependencies.get_authz_evaluator", _mock_getter)
-    monkeypatch.setattr("syntara.authz.dependencies.get_authz_evaluator", _mock_getter)
-    monkeypatch.setattr("syntara.workflows.executions_router.get_authz_evaluator", _mock_getter)
+    # Patch the definition module plus every router module that binds
+    # get_authz_evaluator, derived from the same source of truth the
+    # collection-time import loop uses, so a newly added router cannot be
+    # missed here.
+    for target in ("syntara.authz.dependencies", *ROUTER_MODULES):
+        monkeypatch.setattr(f"{target}.get_authz_evaluator", _mock_getter)
 
     app.dependency_overrides[get_authz_evaluator] = lambda: mock_evaluator
 

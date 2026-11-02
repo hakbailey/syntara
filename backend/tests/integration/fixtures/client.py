@@ -20,7 +20,9 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from syntara.audit.outbox.worker import get_outbox_worker
 from syntara.auth.dependencies import get_current_user
 from syntara.core.database.session import get_db
+from syntara.files.workers.file_cleanup import get_multipart_cleanup_worker
 from syntara.workflows.services.execution_streaming_service import ExecutionStreamingService
+from syntara.workflows.workers.schedule_reconciliation import get_schedule_reconciliation_worker
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
@@ -53,7 +55,11 @@ async def session_app(
     test_session_factory: async_sessionmaker[AsyncSession],
 ) -> AsyncGenerator[FastAPI, None]:
     """Create a session-scoped app with routers discovered once per worker."""
+    # Imported lazily so registering this plugin module does not import
+    # syntara.api.main; test modules and fixtures that need the app import it
+    # themselves.
     from syntara.api.main import app
+    from tests.integration.helpers.lifespan import patched_test_db
 
     mock_evaluator = AsyncMock()
     mock_evaluator.health = AsyncMock(return_value=True)
@@ -61,21 +67,23 @@ async def session_app(
     mock_evaluator.stop = AsyncMock()
     mock_evaluator.evaluate = AsyncMock(return_value={"allow": True})
 
-    # A test that entered the app lifespan earlier with an incomplete patch
-    # set (e.g. test_app_lifecycle.py, which does not patch
-    # syntara.audit.outbox.worker.AsyncSessionLocal) may have cached an
-    # AuditOutboxWorker bound to the real database factories. Drop it so the
-    # lifespan below constructs the worker inside this fixture's patch set.
+    # A test that entered the app lifespan earlier may have cached workers
+    # bound to another test's database factories (the outbox worker, and the
+    # schedule-reconciliation and multipart-cleanup singletons whose modules
+    # bind AsyncSessionLocal at import). Drop them so the lifespan below
+    # constructs each worker inside this fixture's patch set; the two
+    # singleton workers are also patched at their own module attributes below
+    # because patching syntara.core.database.session.AsyncSessionLocal never
+    # reaches their import-time bindings.
     get_outbox_worker.cache_clear()
+    get_multipart_cleanup_worker.cache_clear()
+    get_schedule_reconciliation_worker.cache_clear()
 
     with (
-        patch("syntara.core.database.session.engine", test_db_engine),
-        patch("syntara.core.database.session.AsyncSessionLocal", test_session_factory),
-        patch("syntara.api.main.engine", test_db_engine),
-        patch("syntara.api.main.AsyncSessionLocal", test_session_factory),
-        patch("syntara.audit.outbox.worker.AsyncSessionLocal", test_session_factory),
-        patch("syntara.audit.outbox.worker.AuditWorkerAsyncSessionLocal", test_session_factory),
-        patch("syntara.audit.outbox.session.AuditWorkerAsyncSessionLocal", test_session_factory),
+        # Same shared patch set as enter_test_lifespan: a factory or engine
+        # binding missed here means the session app (or a worker singleton it
+        # caches) runs against the real database for the rest of the worker.
+        patched_test_db(test_db_engine, test_session_factory),
         patch("syntara.api.main.RegoEvaluator", return_value=mock_evaluator),
     ):
         from syntara.core.seed import run_seeders
@@ -200,14 +208,10 @@ def sync_test_client(
     mock_evaluator.evaluate = AsyncMock(return_value={"allow": True})
 
     try:
+        from tests.integration.helpers.lifespan import patched_test_db
+
         with (
-            patch("syntara.core.database.session.engine", test_db_engine),
-            patch("syntara.core.database.session.AsyncSessionLocal", session_factory),
-            patch("syntara.api.main.engine", test_db_engine),
-            patch("syntara.api.main.AsyncSessionLocal", session_factory),
-            patch("syntara.audit.outbox.worker.AsyncSessionLocal", session_factory),
-            patch("syntara.audit.outbox.worker.AuditWorkerAsyncSessionLocal", session_factory),
-            patch("syntara.audit.outbox.session.AuditWorkerAsyncSessionLocal", session_factory),
+            patched_test_db(test_db_engine, session_factory),
             patch("syntara.api.main.RegoEvaluator", return_value=mock_evaluator),
         ):
             client = TestClient(app)

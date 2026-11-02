@@ -15,7 +15,7 @@ import importlib
 import sys
 from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import NamedTuple
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
@@ -37,13 +37,14 @@ from syntara.authz.models.project import Project
 from syntara.authz.resolver import AUTHENTICATED_GROUP_NAME
 from syntara.core.models.group import Group
 from syntara.core.websocket.router import build_websocket_router
+from tests.integration.helpers.authz import install_authz_evaluator_mock
 from tests.integration.helpers.router_modules import ROUTER_MODULES
 
 # Import every router module that binds get_authz_evaluator in Depends(...) now, at
 # collection time, before any fixture or monkeypatch can run. The app registers routers
 # during lifespan startup, not at import, so whichever test first enters the lifespan in
 # a pytest-xdist worker would otherwise decide which monkeypatch is live when these
-# modules are first imported (AAP-98594 work item 1). ROUTER_MODULES is the single
+# modules are first imported. ROUTER_MODULES is the single
 # source of truth for the list; the router binding regression test guards that it
 # stays exhaustive.
 # A failure here is a collection error on purpose, unlike discover_routers' per-module
@@ -69,6 +70,29 @@ pytest_plugins = [
 
 _MOTO_BUCKET = "orchestrator-integration-test"
 _MOTO_REGION = "us-east-1"
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> None:
+    """Fail when an authz dependency override survives fixture teardown.
+
+    Both integration conftests install the evaluator through
+    install_authz_evaluator_mock, which registers the override with
+    monkeypatch.setitem so it is popped at teardown. A fixture that regresses
+    to a plain app.dependency_overrides assignment leaves the override behind
+    for every later test in the same pytest-xdist worker, and the installer
+    test alone cannot catch that. Check after teardown for every test, popping
+    the key so a leak is reported once instead of cascading.
+    """
+    from syntara.api.main import app
+    from syntara.authz.dependencies import get_authz_evaluator
+
+    leaked = get_authz_evaluator in app.dependency_overrides
+    app.dependency_overrides.pop(get_authz_evaluator, None)
+    assert not leaked, (
+        "an authz evaluator dependency override survived fixture teardown; it leaks to "
+        "later tests in this pytest-xdist worker"
+    )
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -252,9 +276,6 @@ def _mock_evaluator_allow_all(monkeypatch: pytest.MonkeyPatch) -> None:
     The ``api`` conftest's ``_mock_evaluator`` fixture overrides this one for
     tests in that directory because pytest uses the most-specific conftest.
     """
-    from syntara.api.main import app
-    from syntara.authz.dependencies import get_authz_evaluator
-
     mock_evaluator = AsyncMock()
     mock_evaluator.evaluate = MagicMock(
         return_value={
@@ -264,18 +285,7 @@ def _mock_evaluator_allow_all(monkeypatch: pytest.MonkeyPatch) -> None:
             "allowed_projects": ["*"],
         }
     )
-
-    def _mock_getter(request: Any = None) -> AsyncMock:  # noqa: ANN401
-        return mock_evaluator
-
-    # Patch the definition module plus every router module that binds
-    # get_authz_evaluator, derived from the same source of truth the
-    # collection-time import loop uses, so a newly added router cannot be
-    # missed here.
-    for target in ("syntara.authz.dependencies", *ROUTER_MODULES):
-        monkeypatch.setattr(f"{target}.get_authz_evaluator", _mock_getter)
-
-    app.dependency_overrides[get_authz_evaluator] = lambda: mock_evaluator
+    install_authz_evaluator_mock(monkeypatch, mock_evaluator)
 
 
 @pytest.fixture

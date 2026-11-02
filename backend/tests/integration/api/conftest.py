@@ -19,13 +19,12 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from syntara.api.main import app
 from syntara.auth.dependencies import get_current_user
-from syntara.authz.dependencies import get_authz_evaluator
 from syntara.authz.evaluator import evaluate_policy_input
 from syntara.authz.models import Project, RoleAssignment
 from syntara.authz.seed import seed_authz_data
 from syntara.core.models import User
 from syntara.core.models.group import Group, user_groups
-from tests.integration.helpers.router_modules import ROUTER_MODULES
+from tests.integration.helpers.authz import install_authz_evaluator_mock
 
 # Name for the test group that grants the 'user' role
 _TEST_GROUP_NAME = "test-users"
@@ -220,19 +219,7 @@ def _mock_evaluator(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace the authz evaluator with one that uses regopy directly."""
     mock_evaluator = AsyncMock()
     mock_evaluator.evaluate = MagicMock(side_effect=_opa_evaluate_cli)
-
-    def _mock_getter(request: Any = None) -> AsyncMock:  # noqa: ANN401
-        return mock_evaluator
-
-    # Patch the definition module plus every router module that binds
-    # get_authz_evaluator, derived from the same source of truth the
-    # collection-time import loop uses, so a newly added router cannot be
-    # missed here.
-    for target in ("syntara.authz.dependencies", *ROUTER_MODULES):
-        monkeypatch.setattr(f"{target}.get_authz_evaluator", _mock_getter)
-
-    # Also override via FastAPI dependency_overrides so Depends(...) resolves correctly.
-    app.dependency_overrides[get_authz_evaluator] = lambda: mock_evaluator
+    install_authz_evaluator_mock(monkeypatch, mock_evaluator)
 
 
 def mcp_payload(name: str | None = None, scope: str = "global") -> dict[str, object]:

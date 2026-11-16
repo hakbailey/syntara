@@ -13,9 +13,9 @@ import asyncio
 import contextlib
 import importlib
 import sys
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Callable, Generator
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
@@ -54,6 +54,13 @@ from tests.integration.helpers.router_modules import ROUTER_MODULES
 for _router_module in ROUTER_MODULES:
     importlib.import_module(_router_module)
 
+# Snapshot taken immediately after the loop above. The router binding regression test
+# compares ROUTER_MODULES against it, so removing or moving the loop fails with the
+# modules it no longer imports at collection time named in the failure.
+ROUTER_MODULES_IMPORTED_AT_COLLECTION: frozenset[str] = frozenset(
+    name for name in ROUTER_MODULES if name in sys.modules
+)
+
 pytest_plugins = [
     "tests.integration.fixtures.database",
     "tests.integration.fixtures.client",
@@ -72,27 +79,96 @@ _MOTO_BUCKET = "orchestrator-integration-test"
 _MOTO_REGION = "us-east-1"
 
 
+# Pre-test app.dependency_overrides, keyed by nodeid. pytest_runtest_setup runs before
+# fixtures are set up, so this is the state a clean teardown must return to.
+_OVERRIDES_BEFORE_TEST: dict[str, dict[Callable[..., Any], Callable[..., Any]]] = {}
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Record app.dependency_overrides before any fixture for this test runs."""
+    from syntara.api.main import app
+
+    _OVERRIDES_BEFORE_TEST[item.nodeid] = dict(app.dependency_overrides)
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> None:
-    """Fail when an authz dependency override survives fixture teardown.
+    """Fail when a dependency override survives fixture teardown.
 
-    Both integration conftests install the evaluator through
-    install_authz_evaluator_mock, which registers the override with
-    monkeypatch.setitem so it is popped at teardown. A fixture that regresses
-    to a plain app.dependency_overrides assignment leaves the override behind
-    for every later test in the same pytest-xdist worker, and the installer
-    test alone cannot catch that. Check after teardown for every test, popping
-    the key so a leak is reported once instead of cascading.
+    Every fixture that sets an override must remove it at teardown; base_client's
+    _scoped_overrides does this by construction, and the authz installer does it
+    through monkeypatch.setitem. Checking every test, not just the authz fixtures,
+    catches a fixture that regresses to a plain app.dependency_overrides assignment,
+    which would otherwise leak to every later test in the same pytest-xdist worker.
+    The pre-test entries are restored after the check so one leak is reported once
+    instead of cascading through the rest of the worker.
     """
     from syntara.api.main import app
-    from syntara.authz.dependencies import get_authz_evaluator
 
-    leaked = get_authz_evaluator in app.dependency_overrides
-    app.dependency_overrides.pop(get_authz_evaluator, None)
-    assert not leaked, (
-        "an authz evaluator dependency override survived fixture teardown; it leaks to "
-        "later tests in this pytest-xdist worker"
+    before = _OVERRIDES_BEFORE_TEST.pop(item.nodeid, {})
+    leaked = sorted(
+        getattr(dependency, "__qualname__", repr(dependency))
+        for dependency in app.dependency_overrides
+        if dependency not in before
     )
+    app.dependency_overrides.clear()
+    app.dependency_overrides.update(before)
+    assert not leaked, (
+        "app.dependency_overrides entries set by this test's fixtures survived teardown; "
+        f"they leak to later tests in this pytest-xdist worker: {leaked}"
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _assert_no_session_state_leaks() -> Generator[None]:
+    """Fail when app-scoped state survives the whole session.
+
+    The per-test hook above catches what one test leaves for the next. This
+    finalizer catches state that outlives every test in a pytest-xdist worker:
+    a dependency override no fixture removed, or a process-wide worker whose
+    task is still running after the session-scoped app shut down. It runs after
+    the session_app fixture's teardown because autouse fixtures are set up
+    first and therefore finalized last.
+    """
+    yield
+
+    from syntara.api.main import app
+    from syntara.audit.outbox.worker import get_outbox_worker
+    from syntara.core.websocket.manager import get_connection_lifecycle_manager
+    from syntara.files.workers.file_cleanup import get_multipart_cleanup_worker
+    from syntara.workflows.workers.schedule_reconciliation import get_schedule_reconciliation_worker
+
+    def _task_still_running(task: asyncio.Task[None] | None) -> bool:
+        if task is None or task.done():
+            return False
+        return not task.get_loop().is_closed()
+
+    leftover_overrides = sorted(
+        getattr(dependency, "__qualname__", repr(dependency)) for dependency in app.dependency_overrides
+    )
+    running_workers = [
+        label
+        for label, getter in (
+            ("outbox", get_outbox_worker),
+            ("multipart cleanup", get_multipart_cleanup_worker),
+            ("schedule reconciliation", get_schedule_reconciliation_worker),
+        )
+        if getter.cache_info().currsize > 0 and _task_still_running(getter()._task)
+    ]
+    if _task_still_running(get_connection_lifecycle_manager()._monitoring_task):
+        running_workers.append("websocket connection monitoring")
+
+    failures = [
+        *(
+            [f"dependency override left on the app after the session: {leftover_overrides}"]
+            if leftover_overrides
+            else []
+        ),
+        *([f"workers still running after the session: {running_workers}"] if running_workers else []),
+    ]
+    app.dependency_overrides.clear()
+    assert not failures, "; ".join(failures)
 
 
 @pytest_asyncio.fixture(scope="session")

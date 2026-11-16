@@ -189,13 +189,15 @@ async def temporal_client(
     session_app.dependency_overrides[get_db] = override_get_db
     session_app.dependency_overrides[get_webhook_temporal_service] = lambda: mock_temporal
 
-    async with AsyncClient(
-        transport=ASGITransport(app=session_app),
-        base_url="http://test",
-    ) as client:
-        yield client
-
-    session_app.dependency_overrides.pop(get_webhook_temporal_service, None)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=session_app),
+            base_url="http://test",
+        ) as client:
+            yield client
+    finally:
+        session_app.dependency_overrides.pop(get_db, None)
+        session_app.dependency_overrides.pop(get_webhook_temporal_service, None)
 
 
 # ============================================================================
@@ -215,15 +217,17 @@ class TestEDAWebhookAuth:
             yield test_db_session
 
         session_app.dependency_overrides[get_db] = override_get_db
-
-        async with AsyncClient(
-            transport=ASGITransport(app=session_app),
-            base_url="http://test",
-        ) as client:
-            response = await client.post(
-                "/api/v1/webhooks/eda/test-path",
-                json={"test": "data"},
-            )
+        try:
+            async with AsyncClient(
+                transport=ASGITransport(app=session_app),
+                base_url="http://test",
+            ) as client:
+                response = await client.post(
+                    "/api/v1/webhooks/eda/test-path",
+                    json={"test": "data"},
+                )
+        finally:
+            session_app.dependency_overrides.pop(get_db, None)
 
         assert response.status_code == 401
 

@@ -5,7 +5,7 @@ API tests work with authorization always enabled, using the real rego policy
 instead of a Python reimplementation.
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -122,12 +122,19 @@ async def admin_client(base_client: AsyncClient, admin_user: User) -> AsyncClien
 
 
 @pytest.fixture
-def auth_as() -> Callable[[User], None]:
+def auth_as() -> Iterator[Callable[[User], None]]:
     """Return a callable that overrides the current user dependency.
 
     Usage:
         auth_as(some_user)  # switches auth to some_user
+
+    The override is restored at fixture teardown. Most callers also use a
+    base_client, whose _scoped_overrides would clean this up, but relying on
+    that makes any future caller without a client leak the override for the
+    rest of the pytest-xdist worker.
     """
+    had_prior = get_current_user in app.dependency_overrides
+    prior = app.dependency_overrides.get(get_current_user)
 
     def _do_auth_as(user: User) -> None:
         async def override() -> User:
@@ -135,7 +142,13 @@ def auth_as() -> Callable[[User], None]:
 
         app.dependency_overrides[get_current_user] = override
 
-    return _do_auth_as
+    yield _do_auth_as
+
+    if had_prior:
+        assert prior is not None
+        app.dependency_overrides[get_current_user] = prior
+    else:
+        app.dependency_overrides.pop(get_current_user, None)
 
 
 async def _make_role_assignment(

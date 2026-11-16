@@ -12,102 +12,22 @@ resolves through regopy with no policies and returns empty lists.
 
 The primary guard is in ``tests/integration/conftest.py``, which imports every
 module in ``tests.integration.helpers.router_modules.ROUTER_MODULES`` at
-collection time, before any fixture or monkeypatch can run. These tests verify
-the outcome of that guard: every ``Depends(get_authz_evaluator)`` captured by
-the routers must reference the real function from
-``syntara.authz.dependencies``, regardless of what the module attribute points
-at right now. In the integration suite, removing the collection-time import
-loop or moving it after fixture setup lets earlier lifespan-entering tests
-poison the imports and these assertions fail.
+collection time, before any fixture or monkeypatch can run. The outcome check
+(every ``Depends(get_authz_evaluator)`` captured by the routers references the
+real function) lives in
+``tests/integration/api/test_router_dependency_binding.py``, where the
+poisoning can actually occur.
 
-The file lives under ``tests/unit/`` because it needs no database: the
-integration tree's autouse Postgres and Redis fixtures would make these checks
-pay container startup in every targeted run.
-
-The real function object is imported at module (collection) time, before any
-monkeypatch replaces the ``syntara.authz.dependencies`` module attribute, so
-this binding is guaranteed to be the real function.
+This file stays under ``tests/unit/`` because its AST checks need neither a
+database nor an import of the application: the integration tree's autouse
+Postgres and Redis fixtures would make each run pay container startup. It
+keeps ``ROUTER_MODULES`` exhaustive and the identifier scan honest.
 """
 
 import ast
-import importlib
-from collections.abc import Iterator
 from pathlib import Path
 
-from fastapi import APIRouter
-
-from syntara.authz.dependencies import get_authz_evaluator as real_get_authz_evaluator
 from tests.integration.helpers.router_modules import ROUTER_MODULES
-
-
-def _iter_dependant_calls(dependant: object) -> Iterator[object]:
-    call = getattr(dependant, "call", None)
-    if call is not None:
-        yield call
-    for sub in getattr(dependant, "dependencies", None) or []:
-        yield from _iter_dependant_calls(sub)
-
-
-def _captured_dependency_calls_by_module() -> dict[str, set[object]]:
-    """Collect every callable captured by the routers' Depends trees, per module."""
-    captured: dict[str, set[object]] = {}
-    for module_name in ROUTER_MODULES:
-        module = importlib.import_module(module_name)
-        for attr in vars(module).values():
-            if not isinstance(attr, APIRouter):
-                continue
-            for route in attr.routes:
-                for depends in getattr(route, "dependencies", None) or []:
-                    if callable(depends.dependency):
-                        captured.setdefault(module_name, set()).add(depends.dependency)
-                dependant = getattr(route, "dependant", None)
-                if dependant is not None:
-                    captured.setdefault(module_name, set()).update(_iter_dependant_calls(dependant))
-    return captured
-
-
-def test_routers_bind_real_get_authz_evaluator() -> None:
-    """Every Depends(get_authz_evaluator) the routers captured is the real function, not a patch."""
-    captured_by_module = _captured_dependency_calls_by_module()
-    captured = {call for calls in captured_by_module.values() for call in calls}
-    assert real_get_authz_evaluator in captured, (
-        "Router modules were imported while a patched get_authz_evaluator was live, so their "
-        "Depends(...) captured the patch instead of the real function. Later tests' "
-        "dependency_overrides (keyed on the real function) will never match."
-    )
-    # The union above passes when any single module bound the real function.
-    # Check every captured getter too, so one module that bound a wrapper (or an
-    # older patch) cannot hide behind another module's correct binding.
-    wrong_binding = sorted(
-        f"{module_name}.{getattr(call, '__qualname__', repr(call))}"
-        for module_name, calls in captured_by_module.items()
-        for call in calls
-        if getattr(call, "__name__", None) == "get_authz_evaluator" and call is not real_get_authz_evaluator
-    )
-    assert not wrong_binding, (
-        "A router module captured a get_authz_evaluator that is not the real function, even "
-        f"though another module bound the real one: {wrong_binding}"
-    )
-    # Partial-poisoning check: the realistic regression is one router module
-    # imported later under a live patch (e.g. by a test helper), which leaves
-    # the other modules' bindings intact. Any test-defined getter captured in a
-    # Depends(...) breaks override keying for those routes alone, so flag every
-    # one of them. Checking for test-defined getters (rather than identity with
-    # this test's own live patch) is what makes the check effective: the
-    # autouse fixture builds a fresh closure per test, so a router poisoned at
-    # an earlier import would have captured a different, earlier closure and an
-    # identity comparison could never fail.
-    poisoned = sorted(
-        f"{module_name}.{getattr(call, '__qualname__', repr(call))}"
-        for module_name, calls in captured_by_module.items()
-        for call in calls
-        if getattr(call, "__module__", "").startswith("tests.")
-    )
-    assert not poisoned, (
-        "Router modules captured test-defined getters in Depends(...); later tests' "
-        "dependency_overrides keyed on the real function will never match for those "
-        f"routes: {poisoned}"
-    )
 
 
 def _references_identifier(tree: ast.AST, name: str) -> bool:

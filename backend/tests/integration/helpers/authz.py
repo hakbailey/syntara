@@ -20,6 +20,13 @@ def install_authz_evaluator_mock(monkeypatch: pytest.MonkeyPatch, evaluator: Asy
     monkeypatch so it is popped at teardown instead of relying on another
     conftest overwriting the same key in the next test.
 
+    Every target is imported before the first patch is installed. A router
+    module first imported while the definition module is patched would capture
+    the test-defined getter in Depends(...) permanently, and later
+    dependency_overrides keyed on the real function would never match for its
+    routes. Importing first makes the helper self-contained; the integration
+    conftest's collection-time import loop remains as defence in depth.
+
     get_authz_evaluator is imported at this module's import time (collection,
     before any patch can run), so the override is always keyed on the real
     function object even when the definition module's attribute is patched.
@@ -32,13 +39,15 @@ def install_authz_evaluator_mock(monkeypatch: pytest.MonkeyPatch, evaluator: Asy
     def _mock_getter(request: Any = None) -> AsyncMock:  # noqa: ANN401
         return evaluator
 
-    for target in ("syntara.authz.dependencies", *ROUTER_MODULES):
-        module = importlib.import_module(target)
+    # Import every target first: a router module imported after the first
+    # setattr below would capture the patched getter in Depends(...) for good.
+    modules = [importlib.import_module(target) for target in ("syntara.authz.dependencies", *ROUTER_MODULES)]
+    for module in modules:
         # ROUTER_MODULES is derived from a scan for the identifier, so it also
         # lists modules that only reach the evaluator through the definition
         # module (for example syntara.authz.dependencies.get_authz_evaluator).
         # Those never bind the bare name, and monkeypatch.setattr's default
-        # raising=True would fail on them; the definition module's patch above
+        # raising=True would fail on them; the definition module's patch
         # already covers their lookups.
         if not hasattr(module, "get_authz_evaluator"):
             continue

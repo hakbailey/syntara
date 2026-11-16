@@ -31,7 +31,7 @@ from syntara.core.websocket.manager import get_connection_lifecycle_manager
 from syntara.files.workers.file_cleanup import get_multipart_cleanup_worker
 from syntara.settings.cache import settings_cache
 from syntara.settings.cache.settings_cache import SettingsCache
-from syntara.workflows.workers.schedule_reconciliation import get_schedule_reconciliation_worker
+from syntara.workflow_runtime.workers.schedule_reconciliation import get_schedule_reconciliation_worker
 
 _MISSING = object()
 
@@ -69,7 +69,7 @@ SESSION_FACTORY_TARGETS: tuple[str, ...] = (
     "syntara.audit.outbox.worker.AuditWorkerAsyncSessionLocal",
     "syntara.audit.outbox.session.AuditWorkerAsyncSessionLocal",
     "syntara.files.workers.file_cleanup.AsyncSessionLocal",
-    "syntara.workflows.workers.schedule_reconciliation.AsyncSessionLocal",
+    "syntara.workflow_runtime.workers.schedule_reconciliation.AsyncSessionLocal",
     "syntara.metrics.completion_poller.AsyncSessionLocal",
     "syntara.metrics.cleanup.AsyncSessionLocal",
     "syntara.auth.session.cleanup.AsyncSessionLocal",

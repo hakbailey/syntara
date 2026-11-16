@@ -137,7 +137,7 @@ def _assert_no_session_state_leaks() -> Generator[None]:
     from syntara.audit.outbox.worker import get_outbox_worker
     from syntara.core.websocket.manager import get_connection_lifecycle_manager
     from syntara.files.workers.file_cleanup import get_multipart_cleanup_worker
-    from syntara.workflows.workers.schedule_reconciliation import get_schedule_reconciliation_worker
+    from syntara.workflow_runtime.workers.schedule_reconciliation import get_schedule_reconciliation_worker
 
     def _task_still_running(task: asyncio.Task[None] | None) -> bool:
         if task is None or task.done():

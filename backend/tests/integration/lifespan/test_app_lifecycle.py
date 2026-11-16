@@ -29,7 +29,7 @@ from syntara.core.websocket.manager import (
 )
 from syntara.core.workers.periodic import PeriodicWorker
 from syntara.files.workers.file_cleanup import get_multipart_cleanup_worker
-from syntara.workflows.workers.schedule_reconciliation import get_schedule_reconciliation_worker
+from syntara.workflow_runtime.workers.schedule_reconciliation import get_schedule_reconciliation_worker
 from tests.integration.helpers.lifespan import (
     ENGINE_TARGETS,
     LEAKED_STATE_ATTRS,
@@ -566,7 +566,7 @@ def test_db_factory_targets_match_import_time_bindings() -> None:
     for worker_module in (
         "syntara.audit.outbox.worker",
         "syntara.files.workers.file_cleanup",
-        "syntara.workflows.workers.schedule_reconciliation",
+        "syntara.workflow_runtime.workers.schedule_reconciliation",
         # Not cached singletons, but their callbacks read the module attribute
         # on every run, so they need the same patch to reach the test database.
         "syntara.metrics.cleanup",

@@ -473,8 +473,13 @@ _ensure-secrets:
 		./tools/generate_secrets.sh; \
 	fi
 
+# Start detached first, then attach the logs. podman-compose's attached mode
+# starts every container concurrently with `podman start -a`; podman 5.5 and
+# older then refuse to start a container whose stopped dependency itself depends
+# on an already-running container ("not found in input list"). Starting detached
+# runs the same starts sequentially and avoids the race.
 .PHONY: run-all
-run-all: _ensure-secrets _ensure-certs ## Start all services (foreground, Ctrl+C to stop)
+run-all: _ensure-secrets _ensure-certs ## Start all services (detached, then follow logs; Ctrl+C stops all)
 	@echo "🚀 Starting all services..."
 	@echo "📍 Syntara API: http://localhost:$${APP_API_PORT:-8000}"
 	@echo "📍 Syntara UI: http://localhost:$${APP_UI_PORT:-8080}"
@@ -485,7 +490,9 @@ run-all: _ensure-secrets _ensure-certs ## Start all services (foreground, Ctrl+C
 	@echo "📍 MCP Server: http://localhost:$${MCP_PORT:-8765}/mcp"
 	@echo "Press Ctrl+C to stop"
 	@echo ""
-	$(COMPOSE_FINAL_CMD) up --build --force-recreate
+	@$(COMPOSE_FINAL_CMD) up --build --force-recreate -d
+	@trap '$(COMPOSE_FINAL_CMD) stop >/dev/null 2>&1 || true' INT TERM; \
+		$(COMPOSE_FINAL_CMD) logs -f || true
 
 .PHONY: services-run
 services-run: _ensure-secrets _ensure-certs ## Start all services (database + cache + temporal + UI + worker + background-worker + MCP) in background and wait until healthy

@@ -214,8 +214,6 @@ services:
     image: ${APP_IMAGE:-localhost/syntara:latest}
     restart: unless-stopped
     command: [python, -m, syntara.workflow_runtime.workers.worker]
-    extra_hosts: # Dev mode: resolves 'syntara' to host when API runs outside containers
-      - "syntara:host-gateway"
     environment:
       - APP_DB_HOST=database
       - APP_DB_PORT=5432
@@ -302,8 +300,6 @@ services:
     image: ${APP_IMAGE:-localhost/syntara:latest}
     restart: unless-stopped
     command: [python, -m, syntara.workflow_runtime.workers.background_worker]
-    extra_hosts:
-      - "syntara:host-gateway"
     environment:
       - APP_DB_HOST=database
       - APP_DB_PORT=5432

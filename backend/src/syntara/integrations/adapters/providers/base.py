@@ -54,8 +54,8 @@ class LLMProviderBase(ABC):
 
         ``GET {base_url}{path}`` must return 401/403 for a rejected key.
         ``None`` means the models listing is already the credential check
-        (Anthropic, Gemini). Used by ``validate()`` only. A 404/405/501 on
-        this path is treated as "endpoint absent" and the models listing
+        (Anthropic, Gemini). Used by ``validate()`` only. A 404/405/501/503
+        on this path is treated as "endpoint absent" and the models listing
         result is trusted.
         """
         return None

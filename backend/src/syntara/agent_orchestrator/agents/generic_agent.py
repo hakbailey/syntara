@@ -196,8 +196,10 @@ class GenericAgent(BaseAgent):
         prompt = state.get("original_prompt", "")
         annotated_tools = annotate_tools_with_relevance(prompt, self.available_tools)
 
-        # Query LLM via LangChain (async)
-        llm_with_tools = self.llm.bind_tools(annotated_tools)
+        # Query LLM via LangChain (async). Bind tools only when there are any:
+        # bind_tools([]) still emits "tools": [], and hosted vLLM-backed
+        # gateways reject an empty tools array with HTTP 400.
+        llm_with_tools = self.llm.bind_tools(annotated_tools) if annotated_tools else self.llm
         # Use state["prompt"] which contains the context-enhanced prompt
         # (with retrieved documents) from the orchestrator, rather than
         # state["messages"] which only has the original user input.

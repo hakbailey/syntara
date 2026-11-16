@@ -15,9 +15,10 @@ class OpenAICompatibleProvider(LLMProviderBase):
     Models endpoint: ``GET {base_url}/models``
     Credential probe: ``GET {base_url}/key`` during ``validate()`` after a
     catalog 200. Some gateways (e.g. OpenRouter) publish ``/models`` without
-    checking the key; ``/key`` is auth-gated. A 404/405/501 means the probe
-    is absent (OpenAI, vLLM) and the catalog result is trusted. ``discover()``
-    does not call this probe.
+    checking the key; ``/key`` is auth-gated. A 404/405/501/503 means the
+    probe is absent (OpenAI, vLLM, gateways whose ingress answers unknown
+    routes with 503) and the catalog result is trusted. ``discover()`` does
+    not call this probe.
     Response format::
 
         { "data": [{ "id": "gpt-4o", "object": "model", "created": 1686935002, "owned_by": "openai" }] }

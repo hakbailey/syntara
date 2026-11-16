@@ -42,6 +42,7 @@ class TestGenericAgentLLMIntegration:
             response_metadata={},
         )
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "anthropic/claude-3.5-sonnet"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -72,12 +73,44 @@ class TestGenericAgentLLMIntegration:
         mock_llm_with_tools.ainvoke.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_no_tools_skips_bind_tools(self) -> None:
+        """Without tools, call the model directly so no empty "tools" array is sent.
+
+        Hosted vLLM-backed gateways reject `"tools": []` with HTTP 400.
+        """
+        mock_llm = Mock()
+        mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="A joke", response_metadata={}))
+        mock_llm.model_name = "zai-org/glm-5-3"
+
+        agent = GenericAgent(llm=mock_llm, available_tools=[])
+        state: AgentState = {
+            "prompt": "Tell me a joke",
+            "original_prompt": "Tell me a joke",
+            "session_id": "test-session",
+            "invocation_id": uuid4(),
+            "actor_context": AuditActorContext(),
+            "context_package": None,
+            "current_agent": "generic_agent",
+            "messages": [HumanMessage("Tell me a joke")],
+            "result": None,
+            "metadata": None,
+            "llm_token_usage_log": [],
+        }
+
+        response = await agent.execute_as_node(state)
+
+        mock_llm.bind_tools.assert_not_called()
+        mock_llm.ainvoke.assert_called_once()
+        assert response["result"] is not None
+
+    @pytest.mark.asyncio
     async def test_generic_agent_result_type_is_answer_not_workflow(self) -> None:
         """Test GenericAgent returns type='answer' (not 'workflow')."""
         mock_llm = Mock()
         mock_llm_with_tools = AsyncMock()
         mock_llm_with_tools.ainvoke.return_value = AIMessage(content="Test answer", response_metadata={})
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "anthropic/claude-3.5-sonnet"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -117,6 +150,7 @@ class TestGenericAgentLLMIntegration:
             usage_metadata={"input_tokens": 12, "output_tokens": 8, "total_tokens": 20},
         )
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "anthropic/claude-opus-4.6"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -157,6 +191,7 @@ class TestGenericAgentLLMIntegration:
         mock_llm_with_tools = AsyncMock()
         mock_llm_with_tools.ainvoke.side_effect = RuntimeError("Invalid API key")
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "anthropic/claude-3.5-sonnet"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -188,6 +223,7 @@ class TestGenericAgentLLMIntegration:
         mock_llm_with_tools = AsyncMock()
         mock_llm_with_tools.ainvoke.side_effect = RuntimeError("Rate limit exceeded")
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "anthropic/claude-3.5-sonnet"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -219,6 +255,7 @@ class TestGenericAgentLLMIntegration:
         mock_llm_with_tools = AsyncMock()
         mock_llm_with_tools.ainvoke.side_effect = TimeoutError("Request timed out")
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "anthropic/claude-3.5-sonnet"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -255,6 +292,7 @@ class TestGenericAgentContextInjection:
         mock_llm_with_tools = AsyncMock()
         mock_llm_with_tools.ainvoke.return_value = AIMessage(content="Hello Jane!", response_metadata={})
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "anthropic/claude-3.5-sonnet"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -344,6 +382,7 @@ class TestGenericAgentToolLoopReEntry:
         mock_llm_with_tools = AsyncMock()
         mock_llm_with_tools.ainvoke.return_value = AIMessage(content="The sum is 42.", response_metadata={})
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "anthropic/claude-3.5-sonnet"
 
         mock_tool = Mock(spec=["name", "description"])
@@ -389,6 +428,7 @@ class TestGenericAgentToolLoopReEntry:
         mock_llm_with_tools = AsyncMock()
         mock_llm_with_tools.ainvoke.return_value = AIMessage(content="Hello!", response_metadata={})
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "anthropic/claude-3.5-sonnet"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -424,6 +464,7 @@ class TestGenericAgentPromptEngineering:
         mock_llm_with_tools = AsyncMock()
         mock_llm_with_tools.ainvoke.return_value = AIMessage(content="Test response", response_metadata={})
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "anthropic/claude-3.5-sonnet"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -463,6 +504,7 @@ class TestGenericAgentPromptEngineering:
         mock_llm_with_tools = AsyncMock()
         mock_llm_with_tools.ainvoke.return_value = AIMessage(content="Done", response_metadata={})
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "test-model"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -499,6 +541,7 @@ class TestGenericAgentPromptEngineering:
         mock_llm_with_tools = AsyncMock()
         mock_llm_with_tools.ainvoke.return_value = AIMessage(content="Done", response_metadata={})
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "test-model"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -531,6 +574,7 @@ class TestGenericAgentPromptEngineering:
         mock_llm_with_tools = AsyncMock()
         mock_llm_with_tools.ainvoke.return_value = AIMessage(content="", response_metadata={})
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "anthropic/claude-3.5-sonnet"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -566,6 +610,7 @@ class TestGenericAgentPromptEngineering:
             tool_calls=[{"name": "get_greeting", "args": {"name": "jimmy"}, "id": "call_1"}],
         )
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "anthropic/claude-3.5-sonnet"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -596,6 +641,7 @@ class TestGenericAgentPromptEngineering:
         mock_llm_with_tools = AsyncMock()
         mock_llm_with_tools.ainvoke.return_value = None  # Malformed response
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "anthropic/claude-3.5-sonnet"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -632,6 +678,7 @@ class TestGenericAgentLogging:
         mock_llm_with_tools = AsyncMock()
         mock_llm_with_tools.ainvoke.return_value = AIMessage(content="Test response", response_metadata={})
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "anthropic/claude-3.5-sonnet"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -735,6 +782,7 @@ class TestTokenUsageLogAccumulation:
             response_metadata={},
         )
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "test-model"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -771,6 +819,7 @@ class TestTokenUsageLogAccumulation:
             response_metadata={},
         )
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "test-model"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])

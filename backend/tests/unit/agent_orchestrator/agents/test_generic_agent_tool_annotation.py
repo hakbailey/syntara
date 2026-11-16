@@ -59,6 +59,7 @@ class TestGenericAgentToolAnnotation:
             response_metadata={},
         )
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "test-model"
 
         search_tool = _make_real_tool("search_repos", "Search GitHub repositories")
@@ -87,6 +88,7 @@ class TestGenericAgentToolAnnotation:
             response_metadata={},
         )
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "test-model"
 
         tools = [
@@ -114,6 +116,7 @@ class TestGenericAgentToolAnnotation:
             response_metadata={},
         )
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "test-model"
 
         tools = [
@@ -144,6 +147,7 @@ class TestGenericAgentToolAnnotation:
             response_metadata={},
         )
         mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm.ainvoke = mock_llm_with_tools.ainvoke
         mock_llm.model_name = "test-model"
 
         tools = [_make_real_tool("search_repos", "Search GitHub repositories")]

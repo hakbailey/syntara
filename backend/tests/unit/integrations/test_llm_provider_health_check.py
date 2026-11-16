@@ -896,6 +896,43 @@ class TestLLMProviderCredentialConfirmation:
         assert result.success is True
 
     @pytest.mark.asyncio
+    async def test_custom_models_200_key_503_validate_succeeds(self) -> None:
+        """Gateways whose ingress answers unknown /key routes with 503 are probe-absent."""
+        adapter = LLMProviderAdapter(_make_config("custom", base_url="https://api.example.com/v1"))
+        with patch("syntara.integrations.adapters.llm_provider.httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(
+                side_effect=[_mock_response({"data": [{"id": "model-a"}]}), _mock_http_error(503)]
+            )
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_cls.return_value = mock_client
+
+            result = await adapter.validate(_openai_cred(), timeout_seconds=10)
+
+        assert result.success is True
+        assert mock_client.get.call_count == 2
+        assert mock_client.get.call_args_list[1].args[0].endswith("/key")
+
+    @pytest.mark.asyncio
+    async def test_key_probe_500_still_fails_validate(self) -> None:
+        """Only 503 is treated as probe-absent; other 5xx remain failures."""
+        adapter = LLMProviderAdapter(_make_config("custom", base_url="https://api.example.com/v1"))
+        with patch("syntara.integrations.adapters.llm_provider.httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(
+                side_effect=[_mock_response({"data": [{"id": "model-a"}]}), _mock_http_error(500)]
+            )
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_cls.return_value = mock_client
+
+            result = await adapter.validate(_openai_cred(), timeout_seconds=10)
+
+        assert result.success is False
+        assert result.error_type == HealthCheckErrorType.CONNECTION_ERROR
+
+    @pytest.mark.asyncio
     async def test_key_probe_timeout_fails_validate(self) -> None:
         adapter = LLMProviderAdapter(_make_config("custom", base_url="https://openrouter.ai/api/v1"))
         with patch("syntara.integrations.adapters.llm_provider.httpx.AsyncClient") as mock_cls:

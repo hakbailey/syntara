@@ -154,6 +154,7 @@ class TestGenericAgentStructuredOutputNoTools:
             usage_metadata={"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
         )
         mock_llm.bind_tools.return_value.ainvoke = AsyncMock(return_value=standard_message)
+        mock_llm.ainvoke = mock_llm.bind_tools.return_value.ainvoke
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
 
@@ -188,6 +189,7 @@ class TestGenericAgentStructuredOutputNoTools:
             usage_metadata={"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
         )
         mock_llm.bind_tools.return_value.ainvoke = AsyncMock(return_value=standard_message)
+        mock_llm.ainvoke = mock_llm.bind_tools.return_value.ainvoke
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
 
@@ -277,6 +279,7 @@ class TestGenericAgentStructuredOutputWithTools:
             usage_metadata={"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
         )
         mock_llm.bind_tools.return_value.ainvoke = AsyncMock(return_value=standard_message)
+        mock_llm.ainvoke = mock_llm.bind_tools.return_value.ainvoke
 
         extracted_output = {"hostname": "server-01", "ip": "192.168.1.10", "status": "unknown"}
         extraction_raw = AIMessage(
@@ -329,6 +332,7 @@ class TestGenericAgentStructuredOutputWithTools:
             usage_metadata={"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
         )
         mock_llm.bind_tools.return_value.ainvoke = AsyncMock(return_value=standard_message)
+        mock_llm.ainvoke = mock_llm.bind_tools.return_value.ainvoke
 
         mock_extraction_llm = MagicMock()
         mock_extraction_llm.ainvoke = AsyncMock(side_effect=Exception("Extraction failed"))
@@ -360,6 +364,7 @@ class TestGenericAgentStructuredOutputWithTools:
             usage_metadata={"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
         )
         mock_llm.bind_tools.return_value.ainvoke = AsyncMock(return_value=standard_message)
+        mock_llm.ainvoke = mock_llm.bind_tools.return_value.ainvoke
 
         extraction_raw = AIMessage(
             content="not-valid-for-schema",

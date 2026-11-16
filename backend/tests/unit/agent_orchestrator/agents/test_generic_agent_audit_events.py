@@ -85,6 +85,7 @@ class TestGenericAgentExecutionEvents:
         mock_llm.bind_tools.return_value.ainvoke = AsyncMock(
             return_value=AIMessage(content="test response", response_metadata={})
         )
+        mock_llm.ainvoke = mock_llm.bind_tools.return_value.ainvoke
         mock_llm.model_name = "test-model"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -136,6 +137,7 @@ class TestGenericAgentExecutionEvents:
         # Mock LLM to raise exception
         mock_llm = MagicMock()
         mock_llm.bind_tools.return_value.ainvoke = AsyncMock(side_effect=ValueError("LLM error"))
+        mock_llm.ainvoke = mock_llm.bind_tools.return_value.ainvoke
         mock_llm.model_name = "test-model"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -181,6 +183,7 @@ class TestGenericAgentLLMInteractionEvents:
         mock_llm.bind_tools.return_value.ainvoke = AsyncMock(
             return_value=AIMessage(content="answer", response_metadata={})
         )
+        mock_llm.ainvoke = mock_llm.bind_tools.return_value.ainvoke
         mock_llm.model_name = "test-model"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -215,6 +218,7 @@ class TestGenericAgentLLMInteractionEvents:
 
         mock_llm = MagicMock()
         mock_llm.bind_tools.return_value.ainvoke = AsyncMock(return_value=AIMessage(content="", response_metadata={}))
+        mock_llm.ainvoke = mock_llm.bind_tools.return_value.ainvoke
         mock_llm.model_name = "test-model"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -283,6 +287,7 @@ class TestGenericAgentLLMInteractionEvents:
         mock_llm.bind_tools.return_value.ainvoke = AsyncMock(
             return_value=AIMessage(content="fallback", response_metadata={})
         )
+        mock_llm.ainvoke = mock_llm.bind_tools.return_value.ainvoke
         mock_llm.model_name = "test-model"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -325,6 +330,7 @@ class TestGenericAgentLLMInteractionEvents:
         mock_llm.bind_tools.return_value.ainvoke = AsyncMock(
             return_value=AIMessage(content="fallback", response_metadata={})
         )
+        mock_llm.ainvoke = mock_llm.bind_tools.return_value.ainvoke
         mock_llm.model_name = "test-model"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])
@@ -465,6 +471,7 @@ class TestGenericAgentLLMInteractionEvents:
         mock_llm.bind_tools.return_value.ainvoke = AsyncMock(
             return_value=AIMessage(content="response with activity", response_metadata={})
         )
+        mock_llm.ainvoke = mock_llm.bind_tools.return_value.ainvoke
         mock_llm.model_name = "test-model"
 
         agent = GenericAgent(llm=mock_llm, available_tools=[])

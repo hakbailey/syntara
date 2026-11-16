@@ -50,10 +50,17 @@ logger = structlog.stdlib.get_logger(__name__)
 
 _MAX_PAGINATION_PAGES = 10
 
-# 404/405/501 on the credential probe means the gateway has no /key-style
-# endpoint (OpenAI, vLLM). Trust the models listing instead of failing.
+# 404/405/501/503 on the credential probe means the gateway has no /key-style
+# endpoint (OpenAI, vLLM) or its ingress answers unknown routes with a default
+# 503 page (OpenShift routes). The catalog call already proved reachability, so
+# trust the models listing instead of failing.
 _PROBE_ABSENT_STATUSES = frozenset(
-    {codes.NOT_FOUND, codes.METHOD_NOT_ALLOWED, codes.NOT_IMPLEMENTED},
+    {
+        codes.NOT_FOUND,
+        codes.METHOD_NOT_ALLOWED,
+        codes.NOT_IMPLEMENTED,
+        codes.SERVICE_UNAVAILABLE,
+    },
 )
 
 _PROVIDER_CONSTRUCTORS: dict[LLMProviderHint, Callable[[], LLMProviderBase]] = {

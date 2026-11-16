@@ -174,7 +174,7 @@ make db-clean
 > for a subsequent run. Keep new seeders within this contract.
 
 > **Schema baseline:** Alembic history was flattened into a single baseline. Databases
-> created with the old revision chain cannot be upgraded in place — run `make db-clean`
+> created with the old revision chain cannot be upgraded in place; run `make db-clean`
 > (or `podman compose down -v` for the full stack), then bring services back up so
 > `alembic upgrade head` and seed run on an empty database.
 > See [docs/standards/database.md](docs/standards/database.md#baseline).
@@ -443,8 +443,7 @@ Syntara automatically routes requests to the appropriate agent:
 
 **LLM Configuration**:
 
-LLM API keys are provided through the credential system — attach an LLM Provider
-credential to the workflow's agentic node. No global API key env var is needed.
+LLM API keys are provided through the credential system: attach an LLM Provider credential to the workflow's agentic node. No global API key env var is needed.
 
 **Environment Variables**:
 - `APP_OPENROUTER_MODEL` (default: `anthropic/claude-sonnet-4.5`)
@@ -524,6 +523,10 @@ make test-unit
 # Run only integration tests
 make test-integration
 
+# Run the app lifecycle suite in its own process (must not share a process
+# with the session-scoped session_app fixture)
+make test-lifespan
+
 # Run only CLI tests
 make test-cli
 
@@ -558,7 +561,7 @@ If `APP_BASE_URL` is not set, the target automatically starts the database and d
 
 ### Syntara Test SDK
 
-Reusable pytest fixtures for integration and E2E tests live in `test-sdk/`. The package is a pytest plugin (`pytest11` entry point), so fixtures are available automatically once installed — no `conftest.py` imports needed.
+Reusable pytest fixtures for integration and E2E tests live in `test-sdk/`. The package is a pytest plugin (`pytest11` entry point), so fixtures are available automatically once installed, with no `conftest.py` imports needed.
 
 **Integration fixtures** (from `orchestrator_test_sdk.app.*`):
 
@@ -575,7 +578,7 @@ Reusable pytest fixtures for integration and E2E tests live in `test-sdk/`. The 
 | `mock_openrouter_llm` / `mock_websocket` | Mock infrastructure |
 | `credential_factory` / `integration_factory` | DB-backed factory helpers |
 
-**Local shared fixtures** (import directly — not from the SDK):
+**Local shared fixtures** (import directly, not from the SDK):
 
 | Module | What it provides |
 |---|---|
@@ -589,7 +592,7 @@ Reusable pytest fixtures for integration and E2E tests live in `test-sdk/`. The 
 | `tests.unit.fixtures.approval` | `create_test_approval_request`, `create_approved_approval_request` |
 | `tests.unit.fixtures.mock_mcp_provider` | `MockMCPProvider` |
 
-**E2E fixtures** (from `orchestrator_test_sdk.e2e.*` — module-scoped, auto-cleanup):
+**E2E fixtures** (from `orchestrator_test_sdk.e2e.*`, module-scoped, auto-cleanup):
 
 | Fixture | What it creates |
 |---|---|
@@ -610,7 +613,7 @@ Reusable pytest fixtures for integration and E2E tests live in `test-sdk/`. The 
 Both `syntara-api-client` (the generated API client) and `orchestrator-test-sdk` live in this repo and can be installed directly from git using pip's subdirectory syntax:
 
 ```toml
-# pyproject.toml — uv / pip
+# pyproject.toml: uv / pip
 dependencies = [
     "syntara-api-client @ git+https://github.com/syntara-orchestration/syntara.git#subdirectory=backend/src/api_client",
     "orchestrator-test-sdk @ git+https://github.com/syntara-orchestration/syntara.git#subdirectory=backend/test-sdk",
@@ -645,7 +648,7 @@ make lint
 make typecheck
 ```
 
-**Type checking is mandatory** — all code must pass mypy in strict mode.
+**Type checking is mandatory**: all code must pass mypy in strict mode.
 
 **Expected workflow:** `make format` then `make lint`. If lint fails due to generated file drift (OpenAPI spec, API client), run `make lint` again to confirm convergence.
 
@@ -740,11 +743,11 @@ Telemetry is configured via environment variables:
 
 Syntara exposes two metrics surfaces: a Prometheus-compatible scrape endpoint for production monitoring, and an internal JSON API for ad-hoc performance testing.
 
-### `GET /metrics` — Prometheus / OpenMetrics
+### `GET /metrics`: Prometheus / OpenMetrics
 
 A standard Prometheus text-exposition endpoint. Point any Prometheus-compatible scraper at it to collect counters, histograms, and gauges covering request traffic, LLM calls, workflow execution, cache performance, database queries, and more.
 
-Metrics are **per-instance and in-memory** — each service instance maintains its own counters and histograms, and they reset to zero on restart. A Prometheus-compatible scraper should poll this endpoint at a regular interval to capture data before it is lost.
+Metrics are **per-instance and in-memory**: each service instance maintains its own counters and histograms, and they reset to zero on restart. A Prometheus-compatible scraper should poll this endpoint at a regular interval to capture data before it is lost.
 
 **Enabled by default.** Disable via environment variable:
 
@@ -758,7 +761,7 @@ APP_METRICS_OPENMETRICS_ENABLED=false   # returns 404 when disabled
 curl http://localhost:8000/metrics
 ```
 
-### `/_internal/metrics/*` — Performance-Testing JSON API
+### `/_internal/metrics/*`: Performance-Testing JSON API
 
 A set of hidden JSON endpoints for querying raw, in-memory metric records during performance-testing or debugging sessions. These routes are **not** listed in `/api_docs/v1/docs` or `/api_docs/v1/openapi.json`.
 
@@ -770,7 +773,7 @@ A set of hidden JSON endpoints for querying raw, in-memory metric records during
 | `/_internal/metrics/kpis/{component}` | GET | KPI summary for a single component (e.g. `llm`, `database`, `api_service`) |
 | `/_internal/metrics/reset` | POST | Clear the in-memory store and counters |
 
-**Disabled by default.** Enable at runtime through the Settings API — no restart required:
+**Disabled by default.** Enable at runtime through the Settings API, with no restart required:
 
 ```bash
 # Enable via the Settings API (requires setting:write permission)

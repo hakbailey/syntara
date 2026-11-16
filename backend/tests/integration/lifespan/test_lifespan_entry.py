@@ -9,10 +9,9 @@ fixture deadlocked. The fixture now commits unconditionally (see
 ``tests/integration/conftest.py``); this test guards that contract by entering
 the lifespan from a non-api directory.
 
-A session-scoped session_app can also be live in the same pytest-xdist worker.
-This test runs with ``loop_scope="session"`` so it shares that fixture's event
-loop, which lets ``enter_test_lifespan`` stop and restart the session app's
-workers like any other worker instead of skipping.
+This test runs in the dedicated lifecycle suite (``make test-lifespan``), in its
+own pytest process, so no session-scoped session_app fixture shares the
+process-wide workers it enters.
 """
 
 import asyncio

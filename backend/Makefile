@@ -149,7 +149,10 @@ test-cli: check-deps ## Run CLI package tests only
 
 .PHONY: test-integration
 test-integration: check-deps ## Run integration tests
-	$(call run-tests,tests/integration/ -v -n auto -m "not mcp")
+	# tests/integration/lifespan boots the app lifespan more than once in one process
+	# and must not share a process with the session-scoped session_app fixture;
+	# test-lifespan runs it separately.
+	$(call run-tests,tests/integration/ -v -n auto -m "not mcp" --ignore=tests/integration/lifespan)
 
 .PHONY: test-e2e-mcp
 test-e2e-mcp: check-deps ## Run MCP E2E tests only
@@ -185,30 +188,37 @@ test-cli-coverage: check-deps ## Run CLI tests with coverage report
 	$(call run-tests,tests/cli/ -v -n auto --cov=src --cov-report=html:htmlcov-cli --cov-report=term --cov-config=pyproject.toml --cov-fail-under=0 --junitxml=pytest-results-cli.xml)
 	@echo "✅ CLI test coverage report: htmlcov-cli/index.html"
 
+.PHONY: test-lifespan
+test-lifespan: check-deps ## Run the app lifecycle suite in its own process
+	# No xdist: the suite boots the process-wide app lifespan repeatedly, and a
+	# session-scoped session_app from another test would share the same workers.
+	$(call run-tests,tests/integration/lifespan/ -v -p no:xdist)
+
 .PHONY: test-integration-coverage
 test-integration-coverage: check-deps ## Run integration tests with coverage report
 	@echo "📊 Running integration tests with coverage..."
-	$(call run-tests,tests/integration/ -v -n auto -m "not mcp" --cov=src --cov-report=html:htmlcov-integration --cov-report=term --cov-config=pyproject.toml --cov-fail-under=0 --junitxml=pytest-results-integration.xml)
+	$(call run-tests,tests/integration/ -v -n auto -m "not mcp" --ignore=tests/integration/lifespan --cov=src --cov-report=html:htmlcov-integration --cov-report=term --cov-config=pyproject.toml --cov-fail-under=0 --junitxml=pytest-results-integration.xml)
 	@echo "✅ Integration test coverage report: htmlcov-integration/index.html"
 
 .PHONY: test-coverage
 test-coverage: check-deps ## Run tests with combined coverage report (XML for CI)
-	$(call run-tests,tests/ -n auto -m "not mcp" --cov=src --cov-report=xml --cov-report=term --cov-config=pyproject.toml --junitxml=pytest-results.xml)
+	$(call run-tests,tests/ -n auto -m "not mcp" --ignore=tests/integration/lifespan --cov=src --cov-report=xml --cov-report=term --cov-config=pyproject.toml --junitxml=pytest-results.xml)
 
 .PHONY: test-coverage-report
 test-coverage-report: check-deps ## Run tests with combined coverage report (HTML)
-	$(call run-tests,tests/ -n auto -m "not mcp" --cov=src --cov-report=html --cov-report=term --cov-config=pyproject.toml --junitxml=pytest-results.xml)
+	$(call run-tests,tests/ -n auto -m "not mcp" --ignore=tests/integration/lifespan --cov=src --cov-report=html --cov-report=term --cov-config=pyproject.toml --junitxml=pytest-results.xml)
 
 .PHONY: test-fast
 test-fast: check-deps ## Run tests with fail-fast and short traceback
-	$(call run-tests,tests/ -x --tb=short)
+	$(call run-tests,tests/ -x --tb=short --ignore=tests/integration/lifespan)
 
 .PHONY: test-all
 test-all: check-deps ## Run all tests (unit + integration; E2E runs separately via test-e2e)
 	# E2E tests require a full running stack (API, Temporal, MCP server) and are
 	# run by the dedicated `test-e2e` target; ignore them here so this target can
 	# run against the testcontainers-only environment.
-	$(call run-tests,tests/ -v -n auto -m "not mcp" --ignore=tests/e2e --cov=src --cov-config=pyproject.toml)
+	$(call run-tests,tests/ -v -n auto -m "not mcp" --ignore=tests/e2e --ignore=tests/integration/lifespan --cov=src --cov-config=pyproject.toml)
+	$(MAKE) test-lifespan
 
 # _e2e-run: shared infrastructure setup for all e2e targets.
 # Starts mock Segment, database, Temporal, and the API server,

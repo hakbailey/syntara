@@ -126,6 +126,7 @@ Before submitting your changes:
 
 - **Unit tests**: `make test-unit` - Test individual components in isolation
 - **Integration tests**: `make test-integration` - Test component interactions
+- **Lifecycle tests**: `make test-lifespan` - Boot the app lifespan repeatedly in its own pytest process
 - **Coverage reports**: `make test-coverage` - Ensure adequate test coverage
 
 ### Pre-commit
@@ -179,7 +180,7 @@ The pre-commit hook (enforced in CI) compares your spec against `devel` to detec
 
 **Every meaningful OpenAPI spec change must update `info.version`.** Comparison is canonical, so serialization-only diffs (whitespace, key order, quotes) do not require a version change. The version increment is enforced: increment the **minor** version for additive changes (new endpoint, field, or enum value) and the **patch** version for spec-only edits (description, example, annotation). A missing version change or an incorrect version increment is blocked.
 
-**If breaking changes are detected**, they are blocked in place — full stop. A new major version is a new spec served from a separate URL path (e.g., `/api/v2/`), so it does not register as a breaking change to the current spec. A PR-body annotation is not enough.
+**If breaking changes are detected**, they are blocked in place, full stop. A new major version is a new spec served from a separate URL path (e.g., `/api/v2/`), so it does not register as a breaking change to the current spec. A PR-body annotation is not enough.
 
 See [OpenAPI Spec Management](backend/standards/openapi-spec-management.md) for gate codes and repo configuration.
 
@@ -193,7 +194,7 @@ This is the handbook for the AO REST API Versioning and Deprecation Policy as en
    - there is no non-breaking remediation
    - engineering and BU leadership (Senior Director or above) have approved
    - a member of `syntara-leads` applies the `breaking-change-approved` label
-   - `info.version` is incremented by a **minor** version (never major — a new major version is a new spec at a new path)
+   - `info.version` is incremented by a **minor** version (never major: a new major version is a new spec at a new path)
 4. **Label restriction.** GitHub has no native per-label permission. The Breaking Change Label Guard workflow (`.github/workflows/breaking-change-label-guard.yml`) verifies the actor who added the label is in `syntara-leads`. If not, it fails the check, removes the label, and comments on the PR. Provision `SYNTARA_LEADS_READ_TOKEN` (org Members: read); without it the guard fails closed.
 
 ### Submitting a Pull Request

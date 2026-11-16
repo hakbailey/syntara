@@ -17,12 +17,9 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from syntara.audit.outbox.worker import get_outbox_worker
 from syntara.auth.dependencies import get_current_user
 from syntara.core.database.session import get_db
-from syntara.files.workers.file_cleanup import get_multipart_cleanup_worker
 from syntara.workflows.services.execution_streaming_service import ExecutionStreamingService
-from syntara.workflows.workers.schedule_reconciliation import get_schedule_reconciliation_worker
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
@@ -59,7 +56,10 @@ async def session_app(
     # syntara.api.main; test modules and fixtures that need the app import it
     # themselves.
     from syntara.api.main import app
-    from tests.integration.helpers.lifespan import patched_test_db
+    from tests.integration.helpers.lifespan import (
+        clear_singleton_caches_stopping_live_workers,
+        patched_test_db,
+    )
 
     mock_evaluator = AsyncMock()
     mock_evaluator.health = AsyncMock(return_value=True)
@@ -74,10 +74,9 @@ async def session_app(
     # constructs each worker inside this fixture's patch set; the two
     # singleton workers are also patched at their own module attributes below
     # because patching syntara.core.database.session.AsyncSessionLocal never
-    # reaches their import-time bindings.
-    get_outbox_worker.cache_clear()
-    get_multipart_cleanup_worker.cache_clear()
-    get_schedule_reconciliation_worker.cache_clear()
+    # reaches their import-time bindings. A cached worker that is still
+    # running is stopped first, not just dropped.
+    await clear_singleton_caches_stopping_live_workers()
 
     with (
         # Same shared patch set as enter_test_lifespan: a factory or engine

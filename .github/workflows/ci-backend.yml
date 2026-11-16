@@ -536,6 +536,9 @@ jobs:
         run: |
           set -o pipefail
           make test-integration-coverage 2>&1 | tee integration-test-output.log
+          # The lifecycle suite must not share a pytest process with the
+          # session-scoped session_app fixture, so it runs separately.
+          make test-lifespan 2>&1 | tee -a integration-test-output.log
         working-directory: backend
 
       - name: Upload test output logs

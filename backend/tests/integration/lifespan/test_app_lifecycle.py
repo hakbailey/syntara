@@ -1,4 +1,9 @@
-"""Integration tests for application lifecycle - audit system startup and shutdown."""
+"""Integration tests for application lifecycle - audit system startup and shutdown.
+
+This suite lives in its own directory so the make targets can run it in its own
+pytest process (``make test-lifespan``); see the lifespan helper for why it must
+not share a process with the session-scoped session_app fixture.
+"""
 
 import ast
 import asyncio
@@ -30,14 +35,11 @@ from tests.integration.helpers.lifespan import (
     LEAKED_STATE_ATTRS,
     SESSION_FACTORY_TARGETS,
     UVICORN_LOGGERS,
-    clear_caches_populated_by_entry,
     enter_test_lifespan,
     patched_test_db,
-    restore_audit_subsystems,
-    skip_if_outbox_live_on_other_loop,
-    skip_if_singleton_workers_live_on_other_loop,
     skip_if_singleton_workers_running,
-    stop_newly_started_workers,
+    stop_leftover_audit_subsystems,
+    stop_leftover_workers,
     task_live_on_running_loop,
 )
 
@@ -133,8 +135,8 @@ async def test_lifespan_restores_prior_app_state_attrs(test_db_engine: AsyncEngi
     attribute per phase, to keep the number of full lifespan boots at two.
 
     The test itself must honor the same contract: enter_test_lifespan skips
-    when a live session-scoped session_app owns the process-wide singleton
-    workers, because this function-scoped test cannot revive them.
+    when a process-wide worker is already live, because it cannot revive one
+    it did not start.
     """
     originals = {name: (hasattr(app.state, name), getattr(app.state, name, None)) for name in LEAKED_STATE_ATTRS}
     try:
@@ -202,12 +204,11 @@ async def test_lifespan_leaves_process_global_state_as_found(test_db_engine: Asy
 
     Entering the lifespan starts the audit subsystems, replaces the process-wide
     runtime settings cache, and its shutdown stops the subsystems and removes every
-    root logger handler. A session-scoped session_app fixture relies on all of these
-    for the rest of the pytest-xdist worker, so enter_test_lifespan must leave
-    each one as it found it. In particular, restarting the audit subsystems when
-    nothing was running before the entry would leave the audit lifecycle RUNNING
-    with an outbox worker that a later get_outbox_worker.cache_clear() drops
-    without stopping.
+    root logger handler. The tests in this file boot the lifespan repeatedly in
+    one process, so enter_test_lifespan must leave each one as it found it. In
+    particular, restarting the audit subsystems when nothing was running before
+    the entry would leave the audit lifecycle RUNNING with an outbox worker that
+    a later get_outbox_worker.cache_clear() drops without stopping.
     """
     import logging
 
@@ -256,14 +257,14 @@ async def test_lifespan_leaves_process_global_state_as_found(test_db_engine: Asy
             (
                 logging.getLogger().handlers == prior_handlers,
                 "root logger handlers present before lifespan entry were not restored after "
-                "shutdown; handlers the lifespan never owned (e.g. the session_app fixture's "
-                "per-worker log file handler) are lost for the rest of this worker",
+                "shutdown; handlers the lifespan never owned are lost for the rest of this "
+                "process",
             ),
             (
                 logging.getLogger(AUDIT_LOGGER_NAME).handlers == prior_audit_handlers,
                 "audit logger handlers present before lifespan entry were not restored after "
-                "shutdown; the session_app fixture's audit handler is lost for the rest of this "
-                "worker",
+                "shutdown; audit handlers the lifespan never owned are lost for the rest of this "
+                "process",
             ),
             (
                 logging.getLogger().level == prior_root_level,
@@ -285,7 +286,7 @@ async def test_lifespan_leaves_process_global_state_as_found(test_db_engine: Asy
                 get_registry()._interceptors == prior_interceptors,
                 "interceptors registered before lifespan entry were not restored after shutdown; "
                 "build_websocket_router() appends a ValidationInterceptor per entry with no dedup "
-                "guard, so a session_app's bootstrap callbacks run every retained validator",
+                "guard, so later bootstraps run every retained validator",
             ),
         ]
     )
@@ -301,74 +302,16 @@ async def test_lifespan_leaves_process_global_state_as_found(test_db_engine: Asy
     assert not failed, "\n".join(failed)
 
 
-@pytest.mark.asyncio(loop_scope="session")
-async def test_lifespan_restarts_outbox_worker_running_before_entry(test_db_engine: AsyncEngine) -> None:
-    """Lifespan exit must restart an outbox worker that was running before entry.
-
-    Complements test_lifespan_leaves_process_global_state_as_found, which pins
-    the stopped-prior direction: that test fails if the helper restarts from
-    nothing (leaving an orphaned worker behind). This one pins the running-prior
-    direction: nested shutdown stops a worker that was running on this test's
-    event loop before entry, and the helper must restart it. A worker on another
-    loop (e.g. one a session-scoped session_app started on the session loop)
-    cannot be revived from a function-scoped test; enter_test_lifespan skips
-    that configuration instead. Without this test, removing the
-    restart entirely passes the suite whenever no worker happened to run on this
-    loop earlier in the same pytest-xdist worker, because post-exit STOPPED then
-    matches the prior STOPPED state.
-
-    The outbox worker is an lru_cache singleton, so the pre-entry start is
-    wrapped in the same factory patches enter_test_lifespan applies: if this
-    test creates the worker first in its worker, it must not bind to the real
-    database factories (unreachable in CI).
-    """
-    import syntara.audit.lifecycle as audit_lifecycle
-
-    outbox_was_cached = get_outbox_worker.cache_info().currsize > 0
-    test_session_factory = async_sessionmaker(test_db_engine, class_=AsyncSession, expire_on_commit=False)
-    started_here = False
-    with patched_test_db(test_db_engine, test_session_factory):
-        if audit_lifecycle._state is not audit_lifecycle.AuditLifecycleState.RUNNING:
-            audit_lifecycle.start_audit_outbox_worker()
-            started_here = True
-
-    try:
-        # A cross-loop worker stop would hang the xdist worker instead of
-        # failing, so the timeout is the failure oracle for that direction.
-        async with asyncio.timeout(120), enter_test_lifespan(test_db_engine):
-            assert audit_lifecycle._state is audit_lifecycle.AuditLifecycleState.RUNNING
-        assert audit_lifecycle._state is audit_lifecycle.AuditLifecycleState.RUNNING, (
-            "lifespan exit stopped an outbox worker that was running before entry; "
-            "a live session_app loses its audit worker for the rest of this worker"
-        )
-        assert task_live_on_running_loop(get_outbox_worker()._task), (
-            "the audit lifecycle is RUNNING but the outbox worker task is not live; "
-            "a restore that only sets the state leaves the session_app without a worker"
-        )
-    finally:
-        if started_here:
-            await audit_lifecycle.stop_audit_outbox_worker()
-            # The helper preserves caches that were populated at entry, so this
-            # test must drop any test-factory-bound worker it cached itself.
-            if not outbox_was_cached:
-                get_outbox_worker.cache_clear()
-
-
 def _start_singletons_on_this_loop(
     test_db_engine: AsyncEngine,
 ) -> tuple[WebSocketConnectionLifecycleManager, PeriodicWorker, PeriodicWorker, bool, bool, bool]:
     """Start the three singleton workers on this test's event loop if idle.
 
     Returns the manager, the two periodic workers, and which of the three this
-    call started (so callers stop only what they started). A live session_app
-    that owns these workers on the same loop is fine: nothing is started here
-    and the caller's lifespan entry stops and restarts them, so only a worker
-    on some other loop skips the test. The outbox worker is stopped by the
-    same nested shutdown these callers exercise even though it is not started
-    here. The two lru_cache workers are created inside factory patches so a
-    fresh cache entry binds to the test database instead of the real one.
+    call started (so callers stop only what they started). The two lru_cache
+    workers are created inside factory patches so a fresh cache entry binds to
+    the test database instead of the real one.
     """
-    skip_if_singleton_workers_live_on_other_loop()
     test_session_factory = async_sessionmaker(test_db_engine, class_=AsyncSession, expire_on_commit=False)
     with patched_test_db(test_db_engine, test_session_factory):
         ws_manager = get_connection_lifecycle_manager()
@@ -389,79 +332,15 @@ def _start_singletons_on_this_loop(
 
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_lifespan_restarts_singleton_workers_running_before_entry(test_db_engine: AsyncEngine) -> None:
-    """Lifespan exit must restart the singleton workers that were running before entry.
-
-    Guards two restores no other test pins: the route-table restore (router
-    discovery and the manual WebSocket include append a duplicate route set
-    per entry) and the singleton-worker restarts (the websocket lifecycle
-    manager's monitoring and the multipart-cleanup and schedule-reconciliation
-    workers, all stopped by nested shutdown). Without this test, deleting
-    either restore passes the suite whenever no session-scoped session_app
-    ran earlier in the worker, because the captured prior state is empty.
-
-    The workers are started on this test's own loop: the restart contract only
-    holds when the prior task shares the test's event loop (a session_app's
-    session-loop workers cannot be revived from here), so a worker found
-    running on another loop skips the test instead.
-    """
-    multipart_was_cached = get_multipart_cleanup_worker.cache_info().currsize > 0
-    schedule_was_cached = get_schedule_reconciliation_worker.cache_info().currsize > 0
-    ws_manager, multipart_worker, schedule_worker, started_ws, started_multipart, started_schedule = (
-        _start_singletons_on_this_loop(test_db_engine)
-    )
-
-    prior_routes = list(app.router.routes)
-    try:
-        # The timeout guards the same hang direction as the outbox test.
-        async with asyncio.timeout(120), enter_test_lifespan(test_db_engine):
-            pass
-        assert app.router.routes == prior_routes, (
-            "routes registered before lifespan entry were not restored after shutdown; "
-            "every entry appends a duplicate route set to the singleton app for the "
-            "rest of this worker"
-        )
-        assert task_live_on_running_loop(ws_manager._monitoring_task), (
-            "lifespan exit stopped websocket connection monitoring that was running before entry"
-        )
-        assert task_live_on_running_loop(multipart_worker._task), (
-            "lifespan exit stopped the multipart cleanup worker that was running before entry"
-        )
-        assert task_live_on_running_loop(schedule_worker._task), (
-            "lifespan exit stopped the schedule reconciliation worker that was running before entry"
-        )
-    finally:
-        if started_ws:
-            ws_manager.stop_monitoring()
-        if started_multipart:
-            await multipart_worker.stop()
-        if started_schedule:
-            await schedule_worker.stop()
-        # The helper preserves caches that were populated at entry, so this
-        # test must drop any test-factory-bound workers it cached itself.
-        if not multipart_was_cached:
-            get_multipart_cleanup_worker.cache_clear()
-        if not schedule_was_cached:
-            get_schedule_reconciliation_worker.cache_clear()
-
-
-@pytest.mark.asyncio(loop_scope="session")
 async def test_lifespan_clears_singleton_caches_it_populated(test_db_engine: AsyncEngine) -> None:
     """Helper exit must not leave factory-patched singleton workers cached.
 
-    The prior-state capture and the nested lifespan startup both populate the
-    process-wide lru_cache getters when their caches are empty; the cached
-    workers are then bound to this test's patched session factory and outlive
-    the test with a disposed engine until the next session_app cache_clear
-    (the PR #921 leak class). The helper must clear caches that were empty at
-    entry so the next caller rebuilds against the restored module attributes.
+    The lifespan startup populates the process-wide lru_cache getters; the
+    cached workers are then bound to this test's patched session factory and
+    outlive the test with a disposed engine (the PR #921 leak class). The
+    helper must clear them so the next entry rebuilds against the restored
+    module attributes.
     """
-    # A live session_app owns the cached workers; clearing them here would drop
-    # its running workers without stopping them. This guard is stronger than
-    # the one inside enter_test_lifespan because the clear happens before
-    # entry, and a worker on this test's own loop is just as unsafe to drop.
-    skip_if_singleton_workers_running()
-
     get_outbox_worker.cache_clear()
     get_multipart_cleanup_worker.cache_clear()
     get_schedule_reconciliation_worker.cache_clear()
@@ -504,19 +383,13 @@ async def test_lifespan_clears_singleton_caches_it_populated(test_db_engine: Asy
 
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_stop_newly_started_workers_reclaims_failed_startup_workers(test_db_engine: AsyncEngine) -> None:
-    """stop_newly_started_workers must stop singletons a failed startup left running.
+async def test_stop_leftover_workers_stops_failed_startup_workers(test_db_engine: AsyncEngine) -> None:
+    """stop_leftover_workers must stop singletons a failed startup left running.
 
     FastAPI's lifespan_context skips shutdown when startup raises, so the
     helper's finally cannot rely on nested shutdown having run. No other test
     exercises this reclaim path (triggering a real mid-startup failure is not
-    practical), so it is pinned directly here, together with the opposite
-    direction: workers that were already running before entry must be left
-    alone, because the restart path owns them.
-
-    The test needs exclusive use of the singleton workers: driving the reclaim
-    with an all-false prior treats any live worker as one this test started,
-    which would stop a session_app's worker without replacing it.
+    practical), so it is pinned directly here.
     """
     skip_if_singleton_workers_running()
     multipart_was_cached = get_multipart_cleanup_worker.cache_info().currsize > 0
@@ -525,7 +398,7 @@ async def test_stop_newly_started_workers_reclaims_failed_startup_workers(test_d
         _start_singletons_on_this_loop(test_db_engine)
     )
     try:
-        await stop_newly_started_workers((False, False, False))
+        await stop_leftover_workers()
         assert not task_live_on_running_loop(ws_manager._monitoring_task), (
             "websocket monitoring a failed startup left running was not stopped"
         )
@@ -534,25 +407,6 @@ async def test_stop_newly_started_workers_reclaims_failed_startup_workers(test_d
         )
         assert not task_live_on_running_loop(schedule_worker._task), (
             "schedule reconciliation worker a failed startup left running was not stopped"
-        )
-
-        # Prior-running workers are the restart path's responsibility and must
-        # not be stopped here.
-        if started_ws:
-            ws_manager.start_monitoring()
-        if started_multipart:
-            multipart_worker.start()
-        if started_schedule:
-            schedule_worker.start()
-        await stop_newly_started_workers((True, True, True))
-        assert task_live_on_running_loop(ws_manager._monitoring_task), (
-            "websocket monitoring that was running before entry was stopped by the failed-startup reclaim"
-        )
-        assert task_live_on_running_loop(multipart_worker._task), (
-            "multipart cleanup worker that was running before entry was stopped by the failed-startup reclaim"
-        )
-        assert task_live_on_running_loop(schedule_worker._task), (
-            "schedule reconciliation worker that was running before entry was stopped by the failed-startup reclaim"
         )
     finally:
         if started_ws:
@@ -577,14 +431,14 @@ def _audit_subsystems_running() -> bool:
 
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_restore_audit_subsystems_stops_failed_startup_subsystems(test_db_engine: AsyncEngine) -> None:
-    """restore_audit_subsystems must stop subsystems a failed startup left RUNNING.
+async def test_stop_leftover_audit_subsystems_stops_failed_startup_subsystems(test_db_engine: AsyncEngine) -> None:
+    """stop_leftover_audit_subsystems must stop subsystems a failed startup left RUNNING.
 
     The stop branch only executes when the lifespan started the audit
     subsystems and then raised before shutdown could run (FastAPI's
     lifespan_context skips shutdown on startup failure). No other test pins
     this branch: deleting it passes the entire suite. It is driven directly
-    here, mirroring test_stop_newly_started_workers_reclaims_failed_startup_workers,
+    here, mirroring test_stop_leftover_workers_stops_failed_startup_workers,
     because triggering a real mid-startup failure is not practical.
     """
     import logging
@@ -593,7 +447,6 @@ async def test_restore_audit_subsystems_stops_failed_startup_subsystems(test_db_
     import syntara.core.logging.lifecycle as logging_lifecycle
     from syntara.audit.logging import AUDIT_LOGGER_NAME
 
-    skip_if_outbox_live_on_other_loop()
     outbox_was_cached = get_outbox_worker.cache_info().currsize > 0
     was_running = audit_lifecycle._state is audit_lifecycle.AuditLifecycleState.RUNNING
     test_session_factory = async_sessionmaker(test_db_engine, class_=AsyncSession, expire_on_commit=False)
@@ -618,13 +471,12 @@ async def test_restore_audit_subsystems_stops_failed_startup_subsystems(test_db_
             started_here = True
 
     try:
-        # Prior STOPPED (nothing running before the failed startup) with the
-        # subsystems RUNNING now is exactly the state a mid-startup failure
-        # leaves behind.
-        await restore_audit_subsystems(audit_lifecycle.AuditLifecycleState.STOPPED, prior_outbox_on_loop=False)
+        # Subsystems RUNNING after a failed startup is exactly the state the
+        # helper must reclaim.
+        await stop_leftover_audit_subsystems()
         assert audit_lifecycle._state is audit_lifecycle.AuditLifecycleState.STOPPED, (
-            "restore_audit_subsystems did not stop the audit subsystems a failed startup "
-            "left RUNNING; they keep running for the rest of this pytest-xdist worker"
+            "stop_leftover_audit_subsystems did not stop the audit subsystems a failed startup "
+            "left RUNNING; they keep running for the rest of this process"
         )
     finally:
         # Put the worker back if it was running before this test, so the
@@ -646,38 +498,6 @@ async def test_restore_audit_subsystems_stops_failed_startup_subsystems(test_db_
         audit_logger.setLevel(prior_logging[3])
         audit_logger.propagate = prior_logging[4]
         logging_lifecycle._logging_state = prior_logging[5]
-
-
-@pytest.mark.asyncio(loop_scope="session")
-async def test_clear_caches_preserves_outbox_cache_populated_before_entry(test_db_engine: AsyncEngine) -> None:
-    """clear_caches_populated_by_entry must preserve a cache populated at entry.
-
-    The outbox_was_empty guard is the only thing keeping the helper from
-    dropping a live session_app's cached worker without stopping it (the PR
-    #921 leak class). Deleting the guard (unconditional cache_clear) passes
-    every other test: test_lifespan_clears_singleton_caches_it_populated only
-    exercises the empty-at-entry direction. The cache is populated here
-    outside the helper's patch set, bound to the test database, and must
-    survive the call.
-    """
-    skip_if_outbox_live_on_other_loop()
-    outbox_was_cached = get_outbox_worker.cache_info().currsize > 0
-    test_session_factory = async_sessionmaker(test_db_engine, class_=AsyncSession, expire_on_commit=False)
-    with patched_test_db(test_db_engine, test_session_factory):
-        if not outbox_was_cached:
-            get_outbox_worker()
-
-    try:
-        assert get_outbox_worker.cache_info().currsize > 0, "expected the pre-entry population to fill the cache"
-        clear_caches_populated_by_entry((False, False, False))
-        assert get_outbox_worker.cache_info().currsize > 0, (
-            "clear_caches_populated_by_entry dropped a cache entry that was populated "
-            "before entry; a live session_app's cached worker would be dropped without "
-            "being stopped"
-        )
-    finally:
-        if not outbox_was_cached:
-            get_outbox_worker.cache_clear()
 
 
 def _modules_binding_at_import(name: str) -> set[str]:
@@ -702,10 +522,10 @@ def test_db_factory_targets_match_import_time_bindings() -> None:
     because some modules bind AsyncSessionLocal or engine at import, so
     patching the syntara.core.database.session module attributes never reaches
     them. Two directions are pinned here: a target whose module no longer
-    binds at import is stale, and the lru_cache worker singletons the lifespan
-    starts (whose caches outlive the patch set) must be covered or their
-    cached worker binds to the real database for the rest of the worker (the
-    PR #921 leak class).
+    binds at import is stale, and the workers the lifespan starts must be
+    covered: the lru_cache singletons keep their cached worker for the rest of
+    the worker (the PR #921 leak class), and the per-call cleanup workers read
+    the module attribute every run, so both need their module patched.
 
     Many modules outside the lifespan's reach also bind AsyncSessionLocal at
     import (Temporal activities, pollers, CLI entry points); they are
@@ -747,6 +567,10 @@ def test_db_factory_targets_match_import_time_bindings() -> None:
         "syntara.audit.outbox.worker",
         "syntara.files.workers.file_cleanup",
         "syntara.workflows.workers.schedule_reconciliation",
+        # Not cached singletons, but their callbacks read the module attribute
+        # on every run, so they need the same patch to reach the test database.
+        "syntara.metrics.cleanup",
+        "syntara.auth.session.cleanup",
     ):
         assert f"{worker_module}.AsyncSessionLocal" in SESSION_FACTORY_TARGETS, (
             f"{worker_module} binds AsyncSessionLocal at import time and its lru_cache "

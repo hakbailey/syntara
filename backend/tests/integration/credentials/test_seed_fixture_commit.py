@@ -7,10 +7,10 @@ audit seeder issues ``DROP TRIGGER ... ON groups``, which needs an
 AccessExclusiveLock on the same table, so any lifespan-entering test in a
 directory without a committing fixture deadlocked.
 
-The lifespan-entry regression test skips whenever a session-scoped session_app
-owns the process-wide workers, which is common in a full pytest-xdist run. This
-pin enters no lifespan and therefore runs in every configuration: it reads the
-seeded row back over a separate connection, which only succeeds once the
+The lifespan-entry regression test runs in the dedicated lifecycle suite, in
+its own pytest process. This pin enters no lifespan, so it stays in the
+integration suite and runs with or without that separate invocation: it reads
+the seeded row back over a separate connection, which only succeeds once the
 fixture's insert is committed.
 """
 
